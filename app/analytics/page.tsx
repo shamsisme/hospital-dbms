@@ -1,46 +1,62 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import {
-  BarChart3,
-  TrendingUp,
-  Building2,
-  DollarSign,
-  Users,
-  BedDouble,
-  RefreshCw,
-  ShieldCheck,
-  Activity,
-  Layers,
-  ArrowUpRight,
-} from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import dynamic from 'next/dynamic';
+import { motion } from 'framer-motion';
+import { BedDouble, Building2, Database, IndianRupee, Layers, RefreshCw, ShieldCheck, TrendingUp, Users, Wind } from 'lucide-react';
 import MetricCard from '@/components/MetricCard';
 import { useToast } from '@/components/ToastContext';
+import PageHeader, { GhostButton } from '@/components/PageHeader';
+import RadialGauge from '@/components/fx/RadialGauge';
+import CountUp from '@/components/fx/CountUp';
+import SpotlightCard from '@/components/fx/SpotlightCard';
+
+const CapacityVials = dynamic(() => import('@/components/three/CapacityVials'), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-full items-center justify-center font-mono text-[11px] uppercase tracking-[0.2em] text-fg3">
+      Filling vials…
+    </div>
+  ),
+});
+
+const CONSTRAINTS = [
+  {
+    name: 'ex_no_double_bed_booking',
+    kind: 'EXCLUDE USING gist',
+    body: '(bed_id WITH =, stay_duration_range WITH &&) — no two stays may overlap on the same physical bed.',
+  },
+  {
+    name: 'chk_critical_infra',
+    kind: 'CHECK',
+    body: 'ICU / CCU beds must have has_ventilator = true AND has_oxygen_port = true.',
+  },
+  {
+    name: 'chk_settled_time',
+    kind: 'CHECK',
+    body: "settled_at is non-null if and only if payment_status = 'Settled'.",
+  },
+  {
+    name: 'chk_insurance_limit',
+    kind: 'CHECK',
+    body: '0 ≤ insurance_claim_approved ≤ gross_amount (a generated column).',
+  },
+];
 
 export default function AnalyticsPage() {
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
-  const [data, setData] = useState<{
-    departmentCapacity: any[];
-    wardTypeDistribution: any[];
-    kpis: any;
-  } | null>(null);
+  const [data, setData] = useState<{ departmentCapacity: any[]; wardTypeDistribution: any[]; kpis: any } | null>(null);
 
   const fetchAnalytics = async () => {
     setLoading(true);
     try {
       const res = await fetch('/api/analytics');
       const json = await res.json();
-      if (!res.ok || !json.success) {
-        throw new Error(json.error || 'Failed to fetch analytics');
-      }
+      if (!res.ok || !json.success) throw new Error(json.error || 'Failed to fetch analytics');
       setData(json);
     } catch (err: any) {
-      toast({
-        type: 'error',
-        title: 'Analytics Query Failed',
-        message: err.message,
-      });
+      toast({ type: 'error', title: 'Analytics Query Failed', message: err.message });
     } finally {
       setLoading(false);
     }
@@ -48,280 +64,303 @@ export default function AnalyticsPage() {
 
   useEffect(() => {
     fetchAnalytics();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const kpis = data?.kpis;
   const departments = data?.departmentCapacity || [];
   const wardTypes = data?.wardTypeDistribution || [];
+  const maxRevenue = Math.max(1, ...departments.map((d) => Number(d.total_revenue_billed)));
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
-      {/* Header */}
-      <div className="pb-6 border-b border-slate-200">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <div>
-            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900">
-              Departmental Capacity & Clinical Analytics
-            </h1>
-            <p className="mt-1 text-sm text-slate-500">
-              SQL aggregate reporting of floor capacity, occupancy saturation, and hospital revenue metrics.
-            </p>
-          </div>
+    <div className="mx-auto max-w-7xl px-4 pt-8 sm:px-6">
+      <PageHeader
+        eyebrow="SQL aggregate reporting"
+        title="Capacity & Clinical Analytics"
+        accent={['Clinical', 'Analytics']}
+        subtitle="GROUP BY roll-ups across departments, wards_beds, admissions and billing — floor saturation, revenue and staffing in one view."
+        actions={
+          <GhostButton onClick={fetchAnalytics} disabled={loading}>
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Recalculate aggregates
+          </GhostButton>
+        }
+      />
 
-          <button
-            onClick={fetchAnalytics}
-            disabled={loading}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 transition disabled:opacity-50"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-            <span>Recalculate Aggregates</span>
-          </button>
-        </div>
-      </div>
-
-      {/* KPI Cards */}
-      <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <MetricCard
-          title="Overall Bed Occupancy"
-          value={`${kpis ? kpis.overallOccupancyPct : 0}%`}
-          subtitle={`${kpis ? kpis.total_occupied : 0} of ${kpis ? kpis.total_beds : 0} Total Beds Occupied`}
+          index={0}
+          title="Overall occupancy"
+          value={kpis ? Number(kpis.overallOccupancyPct) : null}
+          decimals={1}
+          suffix="%"
+          subtitle={`${kpis?.total_occupied ?? 0} of ${kpis?.total_beds ?? 0} beds occupied`}
           icon={BedDouble}
           variant={kpis && kpis.overallOccupancyPct > 80 ? 'rose' : 'blue'}
-          badge="Live Hospital Census"
+          progress={kpis ? Number(kpis.overallOccupancyPct) : 0}
         />
-
         <MetricCard
-          title="Active Inpatients"
-          value={kpis ? kpis.total_active_admissions : 0}
-          subtitle="Currently receiving inpatient care"
+          index={1}
+          title="Active inpatients"
+          value={kpis ? Number(kpis.total_active_admissions) : null}
+          subtitle="Currently receiving care"
           icon={Users}
-          variant="emerald"
-          badge="Inpatient Care"
+          variant="rose"
         />
-
         <MetricCard
-          title="Gross Billed Revenue"
-          value={`₹${kpis ? Number(kpis.total_gross_billed).toLocaleString('en-IN', { maximumFractionDigits: 0 }) : 0}`}
-          subtitle={`${kpis ? kpis.settled_bills_count : 0} Settled Bills • ${kpis ? kpis.pending_bills_count : 0} Pending`}
-          icon={DollarSign}
-          variant="slate"
-          badge="Hospital Revenue"
+          index={2}
+          title="Gross billed revenue"
+          value={kpis ? Number(kpis.total_gross_billed) : null}
+          prefix="₹"
+          subtitle={`${kpis?.settled_bills_count ?? 0} settled · ${kpis?.pending_bills_count ?? 0} pending`}
+          icon={IndianRupee}
+          variant="violet"
         />
-
         <MetricCard
-          title="Net Patient Collections"
-          value={`₹${kpis ? Number(kpis.total_net_payable).toLocaleString('en-IN', { maximumFractionDigits: 0 }) : 0}`}
-          subtitle={`₹${kpis ? Number(kpis.total_insurance_claimed).toLocaleString('en-IN', { maximumFractionDigits: 0 }) : 0} Insurance Claimed`}
+          index={3}
+          title="Net patient collections"
+          value={kpis ? Number(kpis.total_net_payable) : null}
+          prefix="₹"
+          subtitle={`₹${Number(kpis?.total_insurance_claimed ?? 0).toLocaleString('en-IN')} insurance claimed`}
           icon={TrendingUp}
           variant="emerald"
-          badge="Net Payable"
         />
       </div>
 
-      {/* Main Requirement: Department-wise SQL Aggregate Summary Table */}
-      <div className="mt-8 rounded-2xl bg-white shadow-sm border border-slate-200 overflow-hidden">
-        <div className="p-5 border-b border-slate-100 bg-slate-50/50 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-          <div>
-            <h2 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
-              <Building2 className="h-5 w-5 text-blue-600" />
-              <span>Departmental Capacity & Revenue Summary</span>
-            </h2>
-            <p className="text-xs text-slate-500">
-              Aggregated from departments, wards_beds, admissions, and billing via parameterized SQL group queries.
-            </p>
+      {/* 3D vials + gauge */}
+      <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-12">
+        <motion.div
+          initial={{ opacity: 0, y: 30 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="screen relative h-[380px] overflow-hidden rounded-3xl border border-tint/[0.14] bg-ink-950 shadow-[0_30px_80px_-40px_rgba(0,0,0,0.6)] lg:col-span-8"
+        >
+          {departments.length > 0 && (
+            <CapacityVials
+              data={departments.map((d) => ({
+                id: d.dept_id,
+                code: d.dept_code,
+                name: d.dept_name,
+                pct: Number(d.occupancy_rate_pct),
+                occupied: Number(d.occupied_beds),
+                total: Number(d.total_beds),
+              }))}
+            />
+          )}
+          <div className="pointer-events-none absolute left-5 top-5">
+            <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-fg2">Occupancy vials</div>
+            <div className="font-display text-base font-semibold text-fg">Liquid level = bed occupancy %</div>
           </div>
+          <div className="pointer-events-none absolute right-5 top-5 rounded-lg border border-tint/[0.14] bg-ink-950/70 px-2.5 py-1.5 font-mono text-[10px] text-fg2 backdrop-blur">
+            fn_get_department_occupancy_rate()
+          </div>
+        </motion.div>
 
-          <span className="text-[11px] font-mono text-slate-500 bg-white px-2.5 py-1 rounded-md border border-slate-200">
-            SQL: GROUP BY d.dept_id
-          </span>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-slate-100/70 text-slate-700 font-bold uppercase tracking-wider text-[11px] border-b border-slate-200">
-              <tr>
-                <th className="px-5 py-3.5">Department</th>
-                <th className="px-5 py-3.5">Floor</th>
-                <th className="px-5 py-3.5">Total Beds</th>
-                <th className="px-5 py-3.5">Occupied</th>
-                <th className="px-5 py-3.5">Bed Occupancy Rate %</th>
-                <th className="px-5 py-3.5">Active Inpatients</th>
-                <th className="px-5 py-3.5">Gross Revenue Billed</th>
-                <th className="px-5 py-3.5">Net Collected</th>
-                <th className="px-5 py-3.5">Staffing</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {loading ? (
-                <tr>
-                  <td colSpan={9} className="px-5 py-12 text-center text-slate-400">
-                    Executing SQL aggregate analytics...
-                  </td>
-                </tr>
-              ) : departments.length === 0 ? (
-                <tr>
-                  <td colSpan={9} className="px-5 py-12 text-center text-slate-400">
-                    No departmental data found in database.
-                  </td>
-                </tr>
-              ) : (
-                departments.map((dept) => {
-                  const occRate = Number(dept.occupancy_rate_pct);
-                  const isHigh = occRate >= 80;
-                  const isMedium = occRate >= 50 && occRate < 80;
-
-                  return (
-                    <tr key={dept.dept_id} className="hover:bg-slate-50/80 transition">
-                      <td className="px-5 py-4">
-                        <div className="font-bold text-slate-900 text-sm">{dept.dept_name}</div>
-                        <div className="font-mono text-[11px] text-slate-500">
-                          {dept.dept_code} • Hotline: {dept.emergency_contact}
-                        </div>
-                      </td>
-
-                      <td className="px-5 py-4 font-semibold text-slate-700">
-                        Floor {dept.floor_number}
-                      </td>
-
-                      <td className="px-5 py-4 font-semibold text-slate-900">
-                        {dept.total_beds}
-                      </td>
-
-                      <td className="px-5 py-4 font-semibold text-rose-600">
-                        {dept.occupied_beds}
-                      </td>
-
-                      <td className="px-5 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-24 bg-slate-200 rounded-full h-2 overflow-hidden">
-                            <div
-                              className={`h-full rounded-full transition-all ${
-                                isHigh ? 'bg-rose-500' : isMedium ? 'bg-amber-500' : 'bg-emerald-500'
-                              }`}
-                              style={{ width: `${Math.min(100, occRate)}%` }}
-                            />
-                          </div>
-                          <span
-                            className={`font-mono font-bold text-xs ${
-                              isHigh
-                                ? 'text-rose-700'
-                                : isMedium
-                                ? 'text-amber-700'
-                                : 'text-emerald-700'
-                            }`}
-                          >
-                            {occRate}%
-                          </span>
-                        </div>
-                      </td>
-
-                      <td className="px-5 py-4 font-bold text-slate-900">
-                        <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-xs text-blue-700 border border-blue-200">
-                          {dept.active_admissions} active
-                        </span>
-                      </td>
-
-                      <td className="px-5 py-4 font-mono font-bold text-slate-900">
-                        ₹{Number(dept.total_revenue_billed).toLocaleString('en-IN', {
-                          minimumFractionDigits: 2,
-                        })}
-                      </td>
-
-                      <td className="px-5 py-4 font-mono font-bold text-emerald-600">
-                        ₹{Number(dept.total_net_patient_payable).toLocaleString('en-IN', {
-                          minimumFractionDigits: 2,
-                        })}
-                      </td>
-
-                      <td className="px-5 py-4 text-[11px] text-slate-600">
-                        <span className="font-bold text-slate-800">{dept.on_duty_doctors}</span> / {dept.total_doctors} doctors on-duty
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Secondary Aggregation: Ward Type Distribution */}
-      <div className="mt-8 grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="rounded-2xl bg-white p-5 shadow-sm border border-slate-200">
-          <h3 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
-            <Layers className="h-4 w-4 text-blue-600" />
-            <span>Ward Type Capacity & Tariff Distribution</span>
-          </h3>
-          <p className="mt-0.5 text-xs text-slate-500">
-            Bed categorization by clinical specialty and life-support readiness.
-          </p>
-
-          <div className="mt-4 divide-y divide-slate-100">
-            {wardTypes.map((ward) => (
-              <div key={ward.ward_type} className="py-3 flex items-center justify-between text-xs">
-                <div>
-                  <span className="font-bold text-slate-900">{ward.ward_type}</span>
-                  <div className="text-[11px] text-slate-500 mt-0.5">
-                    {ward.ventilator_equipped > 0 && `${ward.ventilator_equipped} Ventilators equipped • `}
-                    Avg Tariff: ₹{Number(ward.avg_daily_tariff).toLocaleString('en-IN')}/day
-                  </div>
-                </div>
-
-                <div className="text-right">
-                  <div className="flex items-center gap-2 font-mono font-bold">
-                    <span className="text-rose-600">{ward.occupied_beds} occupied</span>
-                    <span className="text-slate-300">/</span>
-                    <span className="text-slate-700">{ward.total_beds} total</span>
-                  </div>
-                  <span className="text-[10px] text-emerald-700 font-semibold block">
-                    {ward.available_beds} Available
-                  </span>
-                </div>
+        <SpotlightCard className="lg:col-span-4" innerClassName="flex h-full flex-col items-center justify-center p-6">
+          <RadialGauge value={Number(kpis?.overallOccupancyPct ?? 0)} size={210} label="Hospital census" sub={`${kpis?.total_occupied ?? 0}/${kpis?.total_beds ?? 0} beds`} />
+          <div className="mt-6 grid w-full grid-cols-3 gap-2 text-center">
+            {[
+              ['Beds', kpis?.total_beds],
+              ['Occupied', kpis?.total_occupied],
+              ['Free', kpis ? kpis.total_beds - kpis.total_occupied : 0],
+            ].map(([k, v]) => (
+              <div key={k as string} className="rounded-xl border border-tint/[0.11] bg-tint/[0.02] py-2">
+                <CountUp value={Number(v ?? 0)} className="font-display text-lg font-bold text-fg" />
+                <div className="font-mono text-[9.5px] uppercase tracking-wider text-fg3">{k}</div>
               </div>
             ))}
           </div>
+        </SpotlightCard>
+      </div>
+
+      {/* Department roll-up */}
+      <motion.div
+        initial={{ opacity: 0, y: 30 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="glass mt-8 overflow-hidden rounded-2xl"
+      >
+        <div className="flex flex-col gap-2 border-b border-tint/[0.11] p-5 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="flex items-center gap-2 font-display text-lg font-bold text-fg">
+              <Building2 className="h-5 w-5 text-pulse-300" /> Departmental capacity & revenue
+            </h2>
+            <p className="text-xs text-fg3">departments ⋈ wards_beds ⋈ admissions ⋈ billing · parameterized GROUP BY</p>
+          </div>
+          <span className="rounded-md border border-tint/[0.14] bg-sunk px-2.5 py-1 font-mono text-[10.5px] text-pulse-300">GROUP BY d.dept_id</span>
         </div>
 
-        {/* Clinical Operations Summary */}
-        <div className="rounded-2xl bg-white p-5 shadow-sm border border-slate-200 flex flex-col justify-between">
-          <div>
-            <h3 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
-              <ShieldCheck className="h-4 w-4 text-emerald-600" />
-              <span>Database Integrity & Exclusion Enforcement</span>
-            </h3>
-            <p className="mt-0.5 text-xs text-slate-500">
-              Summary of PostgreSQL constraints protecting patient safety and hospital ops.
-            </p>
+        <div className="divide-y divide-tint/[0.09]">
+          {loading && departments.length === 0 ? (
+            <div className="p-10 text-center font-mono text-xs text-fg3">Executing SQL aggregate analytics…</div>
+          ) : (
+            departments.map((dept, i) => {
+              const occ = Number(dept.occupancy_rate_pct);
+              const color = occ >= 80 ? '#fb7185' : occ >= 50 ? '#fbbf24' : '#2ee6f5';
+              const rev = Number(dept.total_revenue_billed);
+              return (
+                <motion.div
+                  key={dept.dept_id}
+                  initial={{ opacity: 0, x: -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: i * 0.08 }}
+                  className="grid grid-cols-2 items-center gap-4 p-5 transition hover:bg-tint/[0.02] lg:grid-cols-12"
+                >
+                  <div className="col-span-2 lg:col-span-3">
+                    <div className="font-display text-sm font-bold text-fg">{dept.dept_name}</div>
+                    <div className="font-mono text-[10.5px] text-fg3">
+                      {dept.dept_code} · F{dept.floor_number} · ☎ {dept.emergency_contact}
+                    </div>
+                  </div>
+                  <div className="col-span-2 lg:col-span-3">
+                    <div className="mb-1.5 flex items-center justify-between font-mono text-[10.5px]">
+                      <span className="text-fg3">
+                        {dept.occupied_beds}/{dept.total_beds} beds
+                      </span>
+                      <span style={{ color }}>{occ}%</span>
+                    </div>
+                    <div className="flex h-2.5 gap-0.5">
+                      {Array.from({ length: Number(dept.total_beds) }).map((_, b) => (
+                        <motion.div
+                          key={b}
+                          className="h-full flex-1 rounded-sm"
+                          initial={{ scaleY: 0 }}
+                          animate={{ scaleY: 1 }}
+                          transition={{ delay: 0.2 + i * 0.08 + b * 0.05 }}
+                          style={{
+                            background: b < Number(dept.occupied_beds) ? '#fb7185' : 'rgba(52,211,153,0.35)',
+                            boxShadow: b < Number(dept.occupied_beds) ? '0 0 10px #fb7185' : undefined,
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                  <div className="lg:col-span-2">
+                    <div className="font-mono text-[9.5px] uppercase tracking-wider text-fg3">Active</div>
+                    <div className="font-display text-lg font-bold text-fg">{dept.active_admissions}</div>
+                  </div>
+                  <div className="lg:col-span-2">
+                    <div className="font-mono text-[9.5px] uppercase tracking-wider text-fg3">Gross / net</div>
+                    <CountUp value={rev} prefix="₹" className="block font-mono text-sm font-bold text-fg" />
+                    <CountUp value={Number(dept.total_net_patient_payable)} prefix="₹" className="block font-mono text-[11px] text-emerald-300" />
+                    <div className="mt-1 h-1 overflow-hidden rounded-full bg-tint/[0.05]">
+                      <motion.div
+                        className="h-full rounded-full bg-gradient-to-r from-plasma-500 to-pink-500"
+                        initial={{ width: 0 }}
+                        animate={{ width: `${(rev / maxRevenue) * 100}%` }}
+                        transition={{ duration: 1.2, delay: 0.3 }}
+                      />
+                    </div>
+                  </div>
+                  <div className="col-span-2 lg:col-span-2 lg:text-right">
+                    <div className="font-mono text-[9.5px] uppercase tracking-wider text-fg3">Staffing</div>
+                    <div className="text-sm text-fg2">
+                      <span className="font-bold text-fg">{dept.on_duty_doctors}</span> / {dept.total_doctors} on duty
+                    </div>
+                  </div>
+                </motion.div>
+              );
+            })
+          )}
+        </div>
+      </motion.div>
 
-            <div className="mt-4 space-y-3 text-xs">
-              <div className="rounded-xl bg-slate-50 p-3 border border-slate-200">
-                <span className="font-bold font-mono text-slate-900">ex_no_double_bed_booking:</span>
-                <p className="text-slate-600 mt-0.5">
-                  GiST exclusion constraint on <code className="text-blue-700 font-mono">(bed_id WITH =, stay_duration_range WITH &&)</code> completely prevents double-booking of any hospital bed across overlapping stay intervals.
-                </p>
-              </div>
-
-              <div className="rounded-xl bg-slate-50 p-3 border border-slate-200">
-                <span className="font-bold font-mono text-slate-900">chk_critical_infra:</span>
-                <p className="text-slate-600 mt-0.5">
-                  Enforces that all ICU and CCU beds must have <code className="text-blue-700 font-mono">has_ventilator = true</code> and <code className="text-blue-700 font-mono">has_oxygen_port = true</code> prior to patient allocation.
-                </p>
-              </div>
-
-              <div className="rounded-xl bg-slate-50 p-3 border border-slate-200">
-                <span className="font-bold font-mono text-slate-900">chk_settled_time:</span>
-                <p className="text-slate-600 mt-0.5">
-                  Guarantees that timestamp <code className="text-blue-700 font-mono">settled_at</code> is non-null only when bill payment status is strictly &lsquo;Settled&rsquo;.
-                </p>
-              </div>
+      <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
+        {/* Ward types */}
+        <motion.div
+          initial={{ opacity: 0, y: 30 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="glass rounded-2xl p-5"
+        >
+          <h3 className="flex items-center gap-2 font-display text-base font-bold text-fg">
+            <Layers className="h-4 w-4 text-plasma-400" /> Ward type distribution
+          </h3>
+          <p className="text-xs text-fg3">Capacity by clinical specialty and life-support readiness.</p>
+          <div className="mt-5 space-y-4">
+            {wardTypes.map((w, i) => {
+              const total = Number(w.total_beds);
+              const seg = (n: number) => `${(Number(n) / Math.max(1, total)) * 100}%`;
+              const other = total - Number(w.occupied_beds) - Number(w.available_beds);
+              return (
+                <div key={w.ward_type}>
+                  <div className="mb-1.5 flex items-center justify-between text-xs">
+                    <span className="flex items-center gap-2 font-semibold text-fg">
+                      {w.ward_type}
+                      {Number(w.ventilator_equipped) > 0 && (
+                        <span className="chip border-plasma-400/30 bg-plasma-500/10 text-plasma-400">
+                          <Wind className="h-3 w-3" /> {w.ventilator_equipped}
+                        </span>
+                      )}
+                    </span>
+                    <span className="font-mono text-[10.5px] text-fg3">
+                      avg ₹{Number(w.avg_daily_tariff).toLocaleString('en-IN')}/d · {total} beds
+                    </span>
+                  </div>
+                  <div className="flex h-3 overflow-hidden rounded-full bg-tint/[0.05]">
+                    {[
+                      [w.occupied_beds, '#fb7185'],
+                      [w.available_beds, '#34d399'],
+                      [other, '#fbbf24'],
+                    ].map(([n, c], k) => (
+                      <motion.div
+                        key={k}
+                        className="h-full"
+                        style={{ background: c as string, boxShadow: `0 0 12px ${c}` }}
+                        initial={{ width: 0 }}
+                        animate={{ width: seg(Number(n)) }}
+                        transition={{ duration: 1, delay: 0.2 + i * 0.1 + k * 0.1, ease: [0.22, 1, 0.36, 1] }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+            <div className="flex gap-4 pt-1 font-mono text-[10px] text-fg3">
+              <span className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-full bg-rose-400" /> occupied</span>
+              <span className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-full bg-emerald-400" /> available</span>
+              <span className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-full bg-amber-400" /> sanitizing / OOS</span>
             </div>
           </div>
+        </motion.div>
 
-          <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-            <span>Connection: pg native pool (20 clients max)</span>
-            <span className="text-emerald-600 font-bold">Database Health: Optimal</span>
+        {/* Constraints */}
+        <motion.div
+          initial={{ opacity: 0, y: 30 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="glass rounded-2xl p-5"
+        >
+          <h3 className="flex items-center gap-2 font-display text-base font-bold text-fg">
+            <ShieldCheck className="h-4 w-4 text-emerald-300" /> Database integrity guards
+          </h3>
+          <p className="text-xs text-fg3">PostgreSQL constraints protecting patient safety and hospital operations.</p>
+          <div className="mt-4 space-y-2.5">
+            {CONSTRAINTS.map((c, i) => (
+              <motion.div
+                key={c.name}
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: i * 0.08 }}
+                className="group relative overflow-hidden rounded-xl border border-tint/[0.12] bg-sunk/60 p-3"
+              >
+                <div
+                  aria-hidden
+                  className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-emerald-400/[0.07] to-transparent transition-transform duration-1000 group-hover:translate-x-full"
+                />
+                <div className="relative flex items-center justify-between gap-2">
+                  <span className="font-mono text-xs font-bold text-fg">{c.name}</span>
+                  <span className="flex items-center gap-1 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2 py-0.5 font-mono text-[9.5px] text-emerald-300">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> ENFORCED
+                  </span>
+                </div>
+                <div className="relative mt-1 font-mono text-[10px] text-plasma-400">{c.kind}</div>
+                <p className="relative mt-1 text-[11.5px] text-fg2">{c.body}</p>
+              </motion.div>
+            ))}
           </div>
-        </div>
+          <div className="mt-4 flex items-center justify-between border-t border-tint/[0.11] pt-3 font-mono text-[10.5px] text-fg3">
+            <span className="flex items-center gap-1.5">
+              <Database className="h-3.5 w-3.5" /> pg pool · 20 clients max
+            </span>
+            <span className="text-emerald-300">health: optimal</span>
+          </div>
+        </motion.div>
       </div>
     </div>
   );

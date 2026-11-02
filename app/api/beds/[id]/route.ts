@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireSession } from '@/lib/auth';
 import { query } from '@/lib/db';
 import { formatPgError } from '@/lib/db-errors';
 
@@ -6,6 +7,8 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  const auth = await requireSession(request);
+  if (auth instanceof NextResponse) return auth;
   try {
     const bedId = parseInt(params.id, 10);
     if (isNaN(bedId)) {

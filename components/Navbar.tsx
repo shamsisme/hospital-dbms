@@ -1,147 +1,167 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import {
-  BedDouble,
-  UserPlus,
-  Receipt,
-  BarChart3,
-  Activity,
-  Database,
-  PhoneCall,
-  Clock,
-  Shield,
-} from 'lucide-react';
+import { motion } from 'framer-motion';
+import { BarChart3, BedDouble, Database, LogOut, PhoneCall, Receipt, ShieldAlert, ShieldCheck, UserPlus } from 'lucide-react';
+import FloatingDock, { DockItem } from './fx/FloatingDock';
+import EcgLine from './fx/EcgLine';
+import ShinyText from './fx/ShinyText';
+import { ROLE_STYLE, initials, useSession } from './auth/SessionContext';
 
+export const NAV_ITEMS: DockItem[] = [
+  { href: '/', label: 'Bed Grid & Triage', icon: BedDouble, hint: '3D digital twin' },
+  { href: '/admissions', label: 'Emergency Admission', icon: UserPlus, hint: 'Triage intake' },
+  { href: '/billing', label: 'Discharge & Billing', icon: Receipt, hint: 'Invoices' },
+  { href: '/analytics', label: 'Capacity Analytics', icon: BarChart3, hint: 'SQL aggregates' },
+];
+
+/** Glass top bar (brand, live DB status, clock) + floating dock navigation. */
 export default function Navbar() {
-  const pathname = usePathname();
-  const [time, setTime] = useState<string>('');
+  const pathname = usePathname() || '/';
+  const [time, setTime] = useState('');
+  const { session, logout } = useSession();
+  const [left, setLeft] = useState<number | null>(null);
+
+  // Break-glass sessions count down and sign out at zero.
+  useEffect(() => {
+    if (!session || session.mode !== 'break_glass') {
+      setLeft(null);
+      return;
+    }
+    const tick = () => {
+      const s = Math.max(0, Math.round((new Date(session.expiresAt).getTime() - Date.now()) / 1000));
+      setLeft(s);
+      if (s === 0) logout('expired');
+    };
+    tick();
+    const i = setInterval(tick, 1000);
+    return () => clearInterval(i);
+  }, [session, logout]);
 
   useEffect(() => {
-    const updateTime = () => {
-      const now = new Date();
-      setTime(
-        now.toLocaleTimeString('en-US', {
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-          hour12: true,
-        })
-      );
-    };
-    updateTime();
-    const interval = setInterval(updateTime, 1000);
-    return () => clearInterval(interval);
+    const tick = () =>
+      setTime(new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }));
+    tick();
+    const i = setInterval(tick, 1000);
+    return () => clearInterval(i);
   }, []);
 
-  const navLinks = [
-    {
-      href: '/',
-      label: 'Bed Grid & Triage',
-      icon: BedDouble,
-      badge: 'Live',
-    },
-    {
-      href: '/admissions',
-      label: 'Emergency Admission',
-      icon: UserPlus,
-    },
-    {
-      href: '/billing',
-      label: 'Discharge & Billing',
-      icon: Receipt,
-    },
-    {
-      href: '/analytics',
-      label: 'Capacity Analytics',
-      icon: BarChart3,
-    },
-  ];
+  const current = NAV_ITEMS.find((n) => n.href === pathname);
 
   return (
-    <header className="sticky top-0 z-40 border-b border-slate-200/90 bg-white/95 backdrop-blur-md shadow-sm">
-      {/* Top emergency status banner */}
-      <div className="bg-slate-900 px-4 py-1.5 text-xs text-slate-300">
-        <div className="mx-auto flex max-w-7xl items-center justify-between">
-          <div className="flex items-center gap-3">
-            <span className="flex items-center gap-1.5 font-medium text-emerald-400">
-              <span className="h-2 w-2 rounded-full bg-emerald-400 animate-ping" />
-              <Database className="h-3.5 w-3.5" />
-              <span>PostgreSQL: hospital_db:5432 (Pool Active)</span>
-            </span>
-            <span className="text-slate-600">|</span>
-            <span className="hidden sm:inline text-slate-400">
-              Exclusion Constraint: <code className="text-amber-300">ex_no_double_bed_booking</code> Enforced
-            </span>
-          </div>
+    <>
+      <motion.header
+        initial={{ y: -40, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ type: 'spring', stiffness: 120, damping: 18 }}
+        className="sticky top-0 z-40 border-b border-tint/[0.11] bg-ink-950/60 backdrop-blur-2xl"
+      >
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
+          <Link href="/" className="group flex items-center gap-3">
+            <div className="screen relative flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl border border-pulse-400/40 shadow-[0_6px_20px_-8px_rgba(0,0,0,0.6)]">
+              <EcgLine className="h-6 w-9" bpm={78} strokeWidth={2.2} color="#7af7ff" />
+            </div>
+            <div className="leading-tight">
+              <div className="font-display text-[17px] font-bold tracking-tight text-fg">
+                Medi<span className="text-gradient">Resource</span>
+              </div>
+              <div className="font-mono text-[10px] uppercase tracking-[0.22em]">
+                <ShinyText>Clinical Command Center</ShinyText>
+              </div>
+            </div>
+          </Link>
 
-          <div className="flex items-center gap-4">
-            <span className="flex items-center gap-1 text-rose-400 font-semibold">
-              <PhoneCall className="h-3 w-3" />
-              <span>ER Trauma Hotline: 108 / 9900112233</span>
-            </span>
-            {time && (
-              <span className="hidden md:flex items-center gap-1 text-slate-400 font-mono">
-                <Clock className="h-3 w-3" />
-                <span>{time}</span>
+          {current && (
+            <motion.div
+              key={current.href}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="hidden items-center gap-2 font-mono text-[11px] text-fg2 xl:flex"
+            >
+              <span className="text-fg3">~/</span>
+              <span className="text-fg">{current.label.toLowerCase().replace(/ & /g, '-').replace(/ /g, '-')}</span>
+            </motion.div>
+          )}
+
+          <div className="flex items-center gap-2 sm:gap-3">
+            <span className="hidden items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-400/[0.07] px-3 py-1 font-mono text-[10.5px] text-emerald-300 md:inline-flex">
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping2 rounded-full bg-emerald-400" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
               </span>
+              <Database className="h-3 w-3" />
+              hospital_db · pool live
+            </span>
+            <span
+              className="hidden items-center gap-1.5 rounded-full border border-amber-300/20 bg-amber-300/[0.06] px-3 py-1 font-mono text-[10.5px] text-amber-200 2xl:inline-flex"
+              title="PostgreSQL GiST exclusion constraint"
+            >
+              <ShieldCheck className="h-3 w-3" />
+              ex_no_double_bed_booking
+            </span>
+            <a
+              href="tel:108"
+              className="inline-flex items-center gap-1.5 rounded-full border border-rose-400/30 bg-rose-500/10 px-3 py-1 text-[11px] font-semibold text-rose-200 transition hover:bg-rose-500/20"
+            >
+              <PhoneCall className="h-3 w-3" />
+              <span className="hidden sm:inline">ER</span> 108
+            </a>
+            {time && (
+              <span className="hidden rounded-lg border border-tint/[0.14] bg-tint/[0.03] px-2.5 py-1 font-mono text-[11px] tabular-nums text-fg2 lg:inline">
+                {time}
+              </span>
+            )}
+            {session && (
+              <div className="flex items-center gap-2 rounded-xl border border-tint/[0.14] bg-tint/[0.03] py-1 pl-1 pr-1.5">
+                <span
+                  className="flex h-7 w-7 items-center justify-center rounded-lg font-display text-[11px] font-bold text-[#060812]"
+                  style={{ background: ROLE_STYLE[session.role].hex }}
+                >
+                  {initials(session.fullName)}
+                </span>
+                <span className="hidden leading-tight md:block">
+                  <span className="block max-w-[150px] truncate text-[12px] font-semibold text-fg">{session.fullName}</span>
+                  <span className="block font-mono text-[9.5px] uppercase tracking-wider" style={{ color: ROLE_STYLE[session.role].hex }}>
+                    {session.role} · {session.staffCode}
+                  </span>
+                </span>
+                <button
+                  onClick={() => logout('signed_out')}
+                  aria-label="Sign out"
+                  title="Sign out"
+                  className="ml-1 rounded-lg p-1.5 text-fg2 transition hover:bg-tint/[0.08] hover:text-fg"
+                >
+                  <LogOut className="h-4 w-4" />
+                </button>
+              </div>
             )}
           </div>
         </div>
-      </div>
-
-      {/* Main navigation */}
-      <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6">
-        <div className="flex items-center gap-4">
-          <Link href="/" className="flex items-center gap-3 group">
-            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-blue-600 to-indigo-700 text-white shadow-md shadow-blue-500/20 group-hover:scale-105 transition">
-              <Activity className="h-6 w-6" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-extrabold text-slate-900 tracking-tight text-lg">
-                  MediResource <span className="text-blue-600">CMS</span>
+        {left !== null && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            className="overflow-hidden border-t border-rose-500/40 bg-rose-500/[0.12]"
+          >
+            <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-2 px-4 py-2 text-xs sm:px-6">
+              <span className="flex items-center gap-2 font-semibold text-rose-100">
+                <ShieldAlert className="h-4 w-4 text-rose-300" />
+                Break-glass emergency access · every action is audited
+              </span>
+              <span className="flex items-center gap-3">
+                <span className="hidden max-w-[360px] truncate italic text-rose-200/80 md:inline">“{session?.reason}”</span>
+                <span className="rounded-md border border-rose-400/40 bg-black/30 px-2 py-0.5 font-mono font-bold tabular-nums text-rose-100">
+                  {String(Math.floor(left / 60)).padStart(2, '0')}:{String(left % 60).padStart(2, '0')} left
                 </span>
-                <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-bold text-blue-700 uppercase tracking-wider">
-                  Clinical
-                </span>
-              </div>
-              <p className="text-[11px] font-medium text-slate-500 hidden sm:block">
-                Centralized Hospital Bed & Emergency Resource Management
-              </p>
+              </span>
             </div>
-          </Link>
-        </div>
+          </motion.div>
+        )}
+      </motion.header>
 
-        {/* Navigation tabs */}
-        <nav className="flex items-center gap-1.5">
-          {navLinks.map((item) => {
-            const Icon = item.icon;
-            const isActive = pathname === item.href;
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={`relative flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-semibold transition-all ${
-                  isActive
-                    ? 'bg-blue-600 text-white shadow-sm shadow-blue-600/30'
-                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                }`}
-              >
-                <Icon className={`h-4 w-4 ${isActive ? 'text-white' : 'text-slate-500'}`} />
-                <span>{item.label}</span>
-                {item.badge && !isActive && (
-                  <span className="rounded-full bg-emerald-100 px-1.5 py-0.2 text-[10px] font-bold text-emerald-700">
-                    {item.badge}
-                  </span>
-                )}
-              </Link>
-            );
-          })}
-        </nav>
-      </div>
-    </header>
+      <FloatingDock items={NAV_ITEMS} active={pathname} />
+    </>
   );
 }

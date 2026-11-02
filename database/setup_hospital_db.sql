@@ -14,6 +14,9 @@ GRANT ALL ON SCHEMA public TO public;
 -- Enable Generalized Search Tree (GiST) scalar index extensions for btree types
 CREATE EXTENSION IF NOT EXISTS btree_gist;
 
+-- pgcrypto: bcrypt PIN hashing (crypt / gen_salt) for staff authentication
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 -- ============================================================================
 -- 1. RELATIONAL SCHEMA DDL (8 TABLES IN FK HIERARCHY ORDER)
 -- ============================================================================
@@ -207,7 +210,14 @@ INSERT INTO wards_beds (bed_id, dept_id, room_number, bed_label, ward_type, has_
 (10, 3, 'NEU-ICU',   'B-1', 'ICU',          true,  true, 9000.00, 'Available'),
 (11, 3, 'NEU-WARD',  'B-2', 'Semi-Private', false, true, 3500.00, 'Available'),
 (12, 4, 'PED-WARD',  'B-2', 'Pediatric',    false, true, 1500.00, 'Sanitizing'),
-(13, 4, 'NICU-CRIT', 'B-1', 'ICU',          true,  true, 6500.00, 'Available');
+(13, 4, 'NICU-CRIT', 'B-1', 'ICU',          true,  true, 6500.00, 'Available'),
+(14, 1, 'ER-TRAUMA', 'B-3', 'General',      false, true, 2500.00, 'Available'),
+(15, 1, 'ER-RESUS',  'B-2', 'ICU',          true,  true, 7500.00, 'Sanitizing'),
+(16, 2, 'CCU-STEP',  'B-2', 'Semi-Private', false, true, 4200.00, 'Available'),
+(17, 3, 'NEU-ICU',   'B-2', 'ICU',          true,  true, 9000.00, 'Available'),
+(18, 3, 'NEU-WARD',  'B-3', 'Semi-Private', false, true, 3500.00, 'Out-Of-Service'),
+(19, 4, 'PED-WARD',  'B-3', 'Pediatric',    false, true, 1500.00, 'Available'),
+(20, 4, 'NICU-CRIT', 'B-2', 'ICU',          true,  true, 6500.00, 'Available');
 
 -- 2.4 Patients
 INSERT INTO patients (patient_id, national_health_id, full_name, gender, dob, blood_group, primary_phone, emergency_contact_name, emergency_contact_phone) VALUES
@@ -528,9 +538,142 @@ FOR EACH ROW
 EXECUTE FUNCTION trg_fn_sync_bed_status();
 
 -- ============================================================================
+-- 5. STAFF AUTHENTICATION (badge + Pulse-PIN login, sessions, break-glass)
+-- ============================================================================
+
+-- Table 9: Staff Accounts (PINs stored only as bcrypt hashes via pgcrypto)
+CREATE TABLE staff_accounts (
+    staff_id SERIAL PRIMARY KEY,
+    staff_code VARCHAR(20) NOT NULL UNIQUE,
+    full_name VARCHAR(100) NOT NULL,
+    staff_role VARCHAR(20) NOT NULL,
+    doctor_id INT UNIQUE REFERENCES doctors(doctor_id) ON DELETE SET NULL,
+    pin_hash TEXT NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT chk_staff_role CHECK (staff_role IN ('Doctor', 'Nurse', 'Admin', 'Billing')),
+    CONSTRAINT chk_staff_code CHECK (staff_code ~ '^(DOC-[0-9]{4}-[A-Z]{2}|(NUR|ADM|BIL)-[0-9]{4})$'),
+    CONSTRAINT chk_doctor_link CHECK (doctor_id IS NULL OR staff_role = 'Doctor'),
+    CONSTRAINT chk_pin_is_bcrypt CHECK (pin_hash LIKE '$2%')
+);
+
+-- Table 10: Staff Sessions (only a SHA-256 hash of the cookie token is stored)
+CREATE TABLE staff_sessions (
+    session_id SERIAL PRIMARY KEY,
+    staff_id INT NOT NULL REFERENCES staff_accounts(staff_id) ON DELETE CASCADE,
+    token_hash CHAR(64) NOT NULL UNIQUE,
+    access_mode VARCHAR(15) NOT NULL DEFAULT 'standard',
+    break_glass_reason TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL,
+    revoked_at TIMESTAMP,
+    CONSTRAINT chk_access_mode CHECK (access_mode IN ('standard', 'break_glass')),
+    CONSTRAINT chk_break_glass_reason CHECK (
+        access_mode <> 'break_glass' OR length(trim(coalesce(break_glass_reason, ''))) >= 10
+    ),
+    CONSTRAINT chk_session_window CHECK (expires_at > created_at),
+    CONSTRAINT chk_break_glass_window CHECK (
+        access_mode <> 'break_glass' OR expires_at <= created_at + INTERVAL '15 minutes'
+    )
+);
+
+-- Table 11: Login Audit Trail (every attempt, success, lock-out, break-glass, logout)
+CREATE TABLE login_audit (
+    audit_id SERIAL PRIMARY KEY,
+    staff_code VARCHAR(20) NOT NULL,
+    staff_id INT REFERENCES staff_accounts(staff_id) ON DELETE SET NULL,
+    event_type VARCHAR(20) NOT NULL,
+    detail TEXT,
+    ip_address VARCHAR(64),
+    user_agent TEXT,
+    occurred_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT chk_event_type CHECK (
+        event_type IN ('login_success', 'login_failed', 'locked_out', 'break_glass', 'logout')
+    )
+);
+CREATE INDEX idx_login_audit_code_time ON login_audit (staff_code, occurred_at DESC);
+
+-- Seed staff badges (demo PIN for every badge: 246810)
+INSERT INTO staff_accounts (staff_code, full_name, staff_role, doctor_id, pin_hash) VALUES
+('DOC-1001-TN', 'Dr. Arvind Swaminathan', 'Doctor',  1,    crypt('246810', gen_salt('bf', 10))),
+('DOC-1002-TN', 'Dr. Radhika Menon',      'Doctor',  2,    crypt('246810', gen_salt('bf', 10))),
+('NUR-2001',    'Sr. Lakshmi Iyer',       'Nurse',   NULL, crypt('246810', gen_salt('bf', 10))),
+('BIL-3001',    'Farhan Qureshi',         'Billing', NULL, crypt('246810', gen_salt('bf', 10))),
+('ADM-0001',    'Meera Pillai',           'Admin',   NULL, crypt('246810', gen_salt('bf', 10)));
+
+-- Function: authenticate a badge + PIN inside the database.
+-- Verifies the bcrypt hash, enforces lock-out (5 failures in 15 minutes) and writes the audit row.
+CREATE OR REPLACE FUNCTION fn_authenticate_staff(
+    p_staff_code VARCHAR,
+    p_pin TEXT,
+    p_ip VARCHAR DEFAULT NULL,
+    p_user_agent TEXT DEFAULT NULL
+)
+RETURNS TABLE (
+    result VARCHAR,
+    staff_id INT,
+    full_name VARCHAR,
+    staff_role VARCHAR,
+    attempts_left INT,
+    retry_after_seconds INT
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    c_max_failures CONSTANT INT := 5;
+    c_window CONSTANT INTERVAL := INTERVAL '15 minutes';
+    v_code VARCHAR := upper(trim(p_staff_code));
+    v_last_success TIMESTAMP;
+    v_failures INT;
+    v_last_failure TIMESTAMP;
+    v_staff staff_accounts%ROWTYPE;
+BEGIN
+    SELECT max(la.occurred_at) INTO v_last_success
+    FROM login_audit la
+    WHERE la.staff_code = v_code AND la.event_type IN ('login_success', 'break_glass');
+
+    SELECT count(*), max(la.occurred_at) INTO v_failures, v_last_failure
+    FROM login_audit la
+    WHERE la.staff_code = v_code
+      AND la.event_type = 'login_failed'
+      AND la.occurred_at > CURRENT_TIMESTAMP - c_window
+      AND la.occurred_at > coalesce(v_last_success, '-infinity'::timestamp);
+
+    SELECT * INTO v_staff FROM staff_accounts sa WHERE sa.staff_code = v_code AND sa.is_active;
+
+    IF v_failures >= c_max_failures THEN
+        INSERT INTO login_audit (staff_code, staff_id, event_type, ip_address, user_agent)
+        VALUES (v_code, v_staff.staff_id, 'locked_out', p_ip, p_user_agent);
+        RETURN QUERY SELECT 'locked'::VARCHAR, NULL::INT, NULL::VARCHAR, NULL::VARCHAR, 0,
+            GREATEST(1, CEIL(EXTRACT(EPOCH FROM (v_last_failure + c_window - CURRENT_TIMESTAMP))))::INT;
+        RETURN;
+    END IF;
+
+    IF v_staff.staff_id IS NOT NULL AND v_staff.pin_hash = crypt(p_pin, v_staff.pin_hash) THEN
+        INSERT INTO login_audit (staff_code, staff_id, event_type, ip_address, user_agent)
+        VALUES (v_code, v_staff.staff_id, 'login_success', p_ip, p_user_agent);
+        RETURN QUERY SELECT 'ok'::VARCHAR, v_staff.staff_id, v_staff.full_name, v_staff.staff_role, c_max_failures, 0;
+        RETURN;
+    END IF;
+
+    -- Unknown badges and wrong PINs look identical to the caller (no account enumeration)
+    INSERT INTO login_audit (staff_code, staff_id, event_type, ip_address, user_agent)
+    VALUES (v_code, v_staff.staff_id, 'login_failed', p_ip, p_user_agent);
+
+    IF v_failures + 1 >= c_max_failures THEN
+        RETURN QUERY SELECT 'locked'::VARCHAR, NULL::INT, NULL::VARCHAR, NULL::VARCHAR, 0,
+            EXTRACT(EPOCH FROM c_window)::INT;
+    ELSE
+        RETURN QUERY SELECT 'invalid'::VARCHAR, NULL::INT, NULL::VARCHAR, NULL::VARCHAR,
+            c_max_failures - (v_failures + 1), 0;
+    END IF;
+END;
+$$;
+
+-- ============================================================================
 -- VERIFICATION CONFIRMATION
 -- ============================================================================
 DO $$
 BEGIN
-    RAISE NOTICE 'hospital_db schema initialized successfully with all 8 tables, constraints, views, procedures, and seed records.';
+    RAISE NOTICE 'hospital_db schema initialized successfully with all 11 tables, constraints, views, procedures, staff authentication and seed records.';
 END $$;

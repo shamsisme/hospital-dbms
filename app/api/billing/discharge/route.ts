@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireSession } from '@/lib/auth';
 import { pool } from '@/lib/db';
 import { formatPgError } from '@/lib/db-errors';
 
 export async function POST(request: NextRequest) {
+  const auth = await requireSession(request);
+  if (auth instanceof NextResponse) return auth;
   const client = await pool.connect();
   try {
     const body = await request.json();

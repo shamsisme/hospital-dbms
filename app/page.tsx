@@ -1,24 +1,43 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
-import Link from 'next/link';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import dynamic from 'next/dynamic';
+import { AnimatePresence, motion } from 'framer-motion';
 import {
-  BedDouble,
-  Users,
   AlertTriangle,
+  BedDouble,
   HeartPulse,
-  Wind,
-  Filter,
-  Search,
-  RefreshCw,
+  MousePointerClick,
   PlusCircle,
-  Building2,
-  Sparkles,
+  RefreshCw,
+  Search,
+  Siren,
+  Users,
 } from 'lucide-react';
 import MetricCard from '@/components/MetricCard';
 import BedCard, { BedData } from '@/components/BedCard';
 import { useToast } from '@/components/ToastContext';
 import ClinicalAlertDialog from '@/components/ClinicalAlertDialog';
+import SplitText from '@/components/fx/SplitText';
+import MovingBorder from '@/components/fx/MovingBorder';
+import Segmented from '@/components/fx/Segmented';
+import { GhostButton } from '@/components/PageHeader';
+
+const HospitalTower = dynamic(() => import('@/components/three/HospitalTower'), {
+  ssr: false,
+  loading: () => <TowerLoading />,
+});
+
+function TowerLoading() {
+  return (
+    <div className="flex h-full w-full flex-col items-center justify-center gap-3 text-fg3">
+      <div className="h-10 w-10 animate-spin rounded-full border-2 border-pulse-400/20 border-t-pulse-300" />
+      <span className="font-mono text-[11px] uppercase tracking-[0.2em]">Rendering digital twin…</span>
+    </div>
+  );
+}
+
+type StatusFilter = 'all' | 'Available' | 'Occupied' | 'Sanitizing' | 'Out-Of-Service';
 
 export default function DashboardPage() {
   const { toast } = useToast();
@@ -27,61 +46,79 @@ export default function DashboardPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [stats, setStats] = useState<any>(null);
   const [beds, setBeds] = useState<BedData[]>([]);
+  const [allBeds, setAllBeds] = useState<BedData[]>([]);
   const [departments, setDepartments] = useState<any[]>([]);
 
-  // Filters
   const [selectedDept, setSelectedDept] = useState('all');
-  const [selectedStatus, setSelectedStatus] = useState('all');
+  const [selectedStatus, setSelectedStatus] = useState<StatusFilter>('all');
   const [selectedWardType, setSelectedWardType] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [focusBed, setFocusBed] = useState<number | null>(null);
 
-  // Alert dialog
-  const [alertDialog, setAlertDialog] = useState<{
-    isOpen: boolean;
-    title: string;
-    message: string;
-    details?: any;
-  }>({
+  const [alertDialog, setAlertDialog] = useState<{ isOpen: boolean; title: string; message: string; details?: any }>({
     isOpen: false,
     title: '',
     message: '',
   });
 
-  const fetchData = useCallback(async (isRefresh = false) => {
-    if (isRefresh) setRefreshing(true);
-    else setLoading(true);
-
-    try {
-      const [statsRes, bedsRes, deptsRes] = await Promise.all([
-        fetch('/api/stats'),
-        fetch(`/api/beds?dept_id=${selectedDept}&status=${selectedStatus}&ward_type=${selectedWardType}&search=${encodeURIComponent(searchQuery)}`),
-        fetch('/api/departments'),
-      ]);
-
-      const [statsData, bedsData, deptsData] = await Promise.all([
-        statsRes.json(),
-        bedsRes.json(),
-        deptsRes.json(),
-      ]);
-
-      if (statsData.success) setStats(statsData.stats);
-      if (bedsData.success) setBeds(bedsData.beds);
-      if (deptsData.success) setDepartments(deptsData.departments);
-    } catch (err: any) {
-      toast({
-        type: 'error',
-        title: 'Connection Error',
-        message: 'Unable to communicate with PostgreSQL hospital_db.',
-      });
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [selectedDept, selectedStatus, selectedWardType, searchQuery, toast]);
+  const fetchData = useCallback(
+    async (isRefresh = false) => {
+      if (isRefresh) setRefreshing(true);
+      else setLoading(true);
+      try {
+        const [statsRes, bedsRes, deptsRes, allRes] = await Promise.all([
+          fetch('/api/stats'),
+          fetch(
+            `/api/beds?dept_id=${selectedDept}&status=${selectedStatus}&ward_type=${selectedWardType}&search=${encodeURIComponent(searchQuery)}`
+          ),
+          fetch('/api/departments'),
+          fetch('/api/beds'),
+        ]);
+        const [statsData, bedsData, deptsData, allData] = await Promise.all([
+          statsRes.json(),
+          bedsRes.json(),
+          deptsRes.json(),
+          allRes.json(),
+        ]);
+        if (statsData.success) setStats(statsData.stats);
+        if (bedsData.success) setBeds(bedsData.beds);
+        if (deptsData.success) setDepartments(deptsData.departments);
+        if (allData.success) setAllBeds(allData.beds);
+      } catch {
+        toast({ type: 'error', title: 'Connection Error', message: 'Unable to communicate with PostgreSQL hospital_db.' });
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [selectedDept, selectedStatus, selectedWardType, searchQuery, toast]
+  );
 
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    const t = setTimeout(() => fetchData(), searchQuery ? 220 : 0);
+    return () => clearTimeout(t);
+  }, [fetchData, searchQuery]);
+
+  // Scroll to a bed picked in the 3D tower
+  useEffect(() => {
+    if (focusBed === null) return;
+    const el = document.getElementById(`bed-${focusBed}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const t = setTimeout(() => setFocusBed(null), 2600);
+      return () => clearTimeout(t);
+    }
+  }, [focusBed, beds]);
+
+  const pickFromTower = (bed: BedData) => {
+    if (!beds.some((b) => b.bed_id === bed.bed_id)) {
+      setSelectedDept('all');
+      setSelectedStatus('all');
+      setSelectedWardType('all');
+      setSearchQuery('');
+    }
+    setFocusBed(bed.bed_id);
+  };
 
   const handleBedStatusUpdate = async (bedId: number, newStatus: string) => {
     try {
@@ -90,9 +127,7 @@ export default function DashboardPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ operational_status: newStatus }),
       });
-
       const data = await res.json();
-
       if (!res.ok || !data.success) {
         setAlertDialog({
           isOpen: true,
@@ -102,26 +137,36 @@ export default function DashboardPage() {
         });
         return;
       }
-
-      toast({
-        type: 'success',
-        title: 'Bed Status Updated',
-        message: `Bed operational status changed to ${newStatus}.`,
-      });
-
+      toast({ type: 'success', title: 'Bed Status Updated', message: `Bed operational status changed to ${newStatus}.` });
       fetchData(true);
     } catch (err: any) {
-      toast({
-        type: 'error',
-        title: 'Update Error',
-        message: err.message,
-      });
+      toast({ type: 'error', title: 'Update Error', message: err.message });
     }
   };
 
+  const statusOptions = useMemo(
+    () => [
+      { value: 'all' as StatusFilter, label: <>All <Count n={stats?.totalBeds} /></> },
+      { value: 'Available' as StatusFilter, label: <>Available <Count n={stats?.availableBeds} /></>, glow: '52,211,153' },
+      { value: 'Occupied' as StatusFilter, label: <>Occupied <Count n={stats?.occupiedBeds} /></>, glow: '251,113,133' },
+      { value: 'Sanitizing' as StatusFilter, label: <>Sanitizing <Count n={stats?.sanitizingBeds} /></>, glow: '251,191,36' },
+      { value: 'Out-Of-Service' as StatusFilter, label: <>Out of service <Count n={stats?.oosBeds} /></>, glow: '148,163,184' },
+    ],
+    [stats]
+  );
+
+  const deptOptions = useMemo(
+    () => [
+      { value: 'all', label: 'All depts' },
+      ...departments.map((d) => ({ value: String(d.dept_id), label: d.dept_code })),
+    ],
+    [departments]
+  );
+
+  const critical = stats?.criticalTriageCount ?? 0;
+
   return (
-    <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
-      {/* Alert Dialog */}
+    <div className="mx-auto max-w-7xl px-4 pt-8 sm:px-6">
       <ClinicalAlertDialog
         isOpen={alertDialog.isOpen}
         onClose={() => setAlertDialog({ ...alertDialog, isOpen: false })}
@@ -130,208 +175,219 @@ export default function DashboardPage() {
         details={alertDialog.details}
       />
 
-      {/* Page Title & Emergency Quick Action */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-6 border-b border-slate-200">
-        <div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900">
-            Bed Occupancy & Triage Dashboard
-          </h1>
-          <p className="mt-1 text-sm text-slate-500">
-            Real-time floor grid, critical ICU reserves, and clinical occupancy triage.
-          </p>
+      {/* HERO: title + 3D digital twin */}
+      <section className="grid grid-cols-1 items-center gap-8 lg:grid-cols-12">
+        <div className="lg:col-span-5">
+          <motion.div
+            initial={{ opacity: 0, x: -12 }}
+            animate={{ opacity: 1, x: 0 }}
+            className="mb-4 inline-flex items-center gap-2 rounded-full border border-pulse-400/25 bg-pulse-400/[0.06] px-3 py-1 font-mono text-[10.5px] uppercase tracking-[0.2em] text-pulse-300"
+          >
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-pulse-300" />
+            Live floor telemetry
+          </motion.div>
+          <SplitText
+            text="Every bed, every heartbeat, one living map."
+            accent={['heartbeat,', 'living']}
+            className="font-display text-[40px] font-bold leading-[1.02] tracking-tight text-fg sm:text-[54px]"
+          />
+          <motion.p
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.5 }}
+            className="mt-4 max-w-md text-sm leading-relaxed text-fg2"
+          >
+            A real-time 3D twin of the hospital. Each floor is a department, each pod a physical bed — colour-coded by
+            operational status and pulsing with the patient&apos;s triage acuity.
+          </motion.p>
+
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.65 }}
+            className="mt-6 flex flex-wrap items-center gap-3"
+          >
+            <MovingBorder href="/admissions" size="lg">
+              <PlusCircle className="h-4 w-4" />
+              New emergency admission
+            </MovingBorder>
+            <GhostButton onClick={() => fetchData(true)} disabled={refreshing}>
+              <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+              {refreshing ? 'Syncing…' : 'Refresh'}
+            </GhostButton>
+          </motion.div>
+
+          <AnimatePresence>
+            {critical > 0 && (
+              <motion.div
+                initial={{ opacity: 0, y: 10, height: 0 }}
+                animate={{ opacity: 1, y: 0, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                transition={{ delay: 0.8 }}
+                className="mt-6 overflow-hidden"
+              >
+                <div className="relative flex items-center gap-3 overflow-hidden rounded-xl border border-rose-500/30 bg-rose-500/[0.08] px-4 py-3">
+                  <motion.div
+                    aria-hidden
+                    className="absolute inset-y-0 w-24 bg-gradient-to-r from-transparent via-rose-400/20 to-transparent"
+                    animate={{ x: ['-120%', '520%'] }}
+                    transition={{ duration: 2.4, repeat: Infinity, ease: 'linear' }}
+                  />
+                  <Siren className="h-5 w-5 flex-shrink-0 text-rose-300" />
+                  <div className="text-xs">
+                    <span className="font-semibold text-rose-100">
+                      {critical} critical patient{critical > 1 ? 's' : ''} on the floor
+                    </span>
+                    <span className="ml-2 font-mono text-rose-300/80">
+                      ESI-1 {stats?.esi1Resus ?? 0} · ESI-2 {stats?.esi2Emergent ?? 0}
+                    </span>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => fetchData(true)}
-            disabled={refreshing}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 transition disabled:opacity-50"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-            <span>{refreshing ? 'Syncing...' : 'Refresh Grid'}</span>
-          </button>
+        <motion.div
+          initial={{ opacity: 0, scale: 0.94, rotateX: 12 }}
+          animate={{ opacity: 1, scale: 1, rotateX: 0 }}
+          transition={{ type: 'spring', stiffness: 60, damping: 16, delay: 0.15 }}
+          style={{ transformPerspective: 1400 }}
+          className="lg:col-span-7"
+        >
+          <div className="screen relative h-[420px] overflow-hidden rounded-3xl border border-tint/[0.14] bg-ink-950 shadow-[0_40px_100px_-40px_rgba(0,0,0,0.9)] sm:h-[480px]">
+            {allBeds.length > 0 ? <HospitalTower beds={allBeds} onPick={pickFromTower} /> : <TowerLoading />}
+            {/* overlays */}
+            <div className="pointer-events-none absolute left-4 top-4 rounded-xl border border-tint/[0.14] bg-ink-950/70 px-3 py-2 backdrop-blur">
+              <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-fg2">Digital twin</div>
+              <div className="font-display text-sm font-semibold text-fg">
+                {allBeds.length} beds · {departments.length} floors
+              </div>
+            </div>
+            <div className="pointer-events-none absolute right-4 top-4 flex flex-col gap-1.5 rounded-xl border border-tint/[0.14] bg-ink-950/70 px-3 py-2 backdrop-blur">
+              {[
+                ['Available', '#34d399'],
+                ['Occupied', '#fb7185'],
+                ['Sanitizing', '#fbbf24'],
+                ['ESI-1 beacon', '#ff3b5c'],
+              ].map(([l, c]) => (
+                <span key={l} className="flex items-center gap-2 text-[10.5px] text-fg2">
+                  <span className="h-2 w-2 rounded-sm" style={{ background: c, boxShadow: `0 0 8px ${c}` }} />
+                  {l}
+                </span>
+              ))}
+            </div>
+            <div className="pointer-events-none absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full border border-tint/[0.14] bg-ink-950/70 px-3 py-1.5 font-mono text-[10px] text-fg2 backdrop-blur">
+              <MousePointerClick className="h-3 w-3 text-pulse-300" /> drag to orbit · scroll to zoom · click a bed
+            </div>
+          </div>
+        </motion.div>
+      </section>
 
-          <Link
-            href="/admissions"
-            className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white shadow-sm shadow-blue-500/20 hover:bg-blue-700 transition"
-          >
-            <PlusCircle className="h-4 w-4" />
-            <span>New Emergency Admission</span>
-          </Link>
-        </div>
-      </div>
-
-      {/* Metric Cards Section */}
-      <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* METRICS */}
+      <section className="mt-10 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <MetricCard
-          title="Total Physical Beds"
-          value={stats ? stats.totalBeds : '...'}
-          subtitle={`${stats ? stats.availableBeds : 0} Sanitized & Ready`}
+          index={0}
+          title="Total physical beds"
+          value={stats?.totalBeds}
+          subtitle={`${stats?.availableBeds ?? 0} sanitized & ready`}
           icon={BedDouble}
           variant="blue"
-          badge={`${stats ? stats.occupancyRate : 0}% Occupied`}
+          badge={`${stats?.occupancyRate ?? 0}% occupied`}
+          progress={stats?.occupancyRate}
         />
-
         <MetricCard
-          title="Occupied Beds"
-          value={stats ? stats.occupiedBeds : '...'}
-          subtitle={`${stats ? stats.activeInpatients : 0} Admitted Patients`}
+          index={1}
+          title="Occupied beds"
+          value={stats?.occupiedBeds}
+          subtitle={`${stats?.activeInpatients ?? 0} admitted patients`}
           icon={Users}
           variant="rose"
           badge="Inpatients"
+          progress={stats ? (stats.occupiedBeds / Math.max(1, stats.totalBeds)) * 100 : 0}
         />
-
         <MetricCard
-          title="Available ICU Beds"
-          value={stats ? stats.availableIcuBeds : '...'}
-          subtitle={`Out of ${stats ? stats.totalIcuBeds : 0} Total Critical Beds`}
+          index={2}
+          title="Available ICU beds"
+          value={stats?.availableIcuBeds}
+          subtitle={`of ${stats?.totalIcuBeds ?? 0} critical-care beds`}
           icon={HeartPulse}
           variant="emerald"
-          badge="Critical Care"
+          badge="Critical care"
+          progress={stats ? (stats.availableIcuBeds / Math.max(1, stats.totalIcuBeds)) * 100 : 0}
         />
-
         <MetricCard
-          title="Critical Triage (ESI 1-2)"
-          value={stats ? stats.criticalTriageCount : '...'}
-          subtitle={`ESI 1 (Resus): ${stats ? stats.esi1Resus : 0} • ESI 2: ${stats ? stats.esi2Emergent : 0}`}
+          index={3}
+          title="Critical triage"
+          value={stats?.criticalTriageCount}
+          subtitle={`ESI 1: ${stats?.esi1Resus ?? 0} · ESI 2: ${stats?.esi2Emergent ?? 0}`}
           icon={AlertTriangle}
-          variant={stats && stats.criticalTriageCount > 0 ? 'amber' : 'slate'}
-          badge="High Alert"
+          variant={critical > 0 ? 'amber' : 'slate'}
+          badge="High alert"
         />
-      </div>
+      </section>
 
-      {/* Filter and Control Bar */}
-      <div className="mt-8 rounded-2xl bg-white p-4 shadow-sm border border-slate-200">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <div className="flex flex-wrap items-center gap-3">
-            {/* Department Filter */}
-            <div className="flex items-center gap-1.5">
-              <Building2 className="h-4 w-4 text-slate-400" />
-              <select
-                value={selectedDept}
-                onChange={(e) => setSelectedDept(e.target.value)}
-                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              >
-                <option value="all">All Departments</option>
-                {departments.map((dept) => (
-                  <option key={dept.dept_id} value={dept.dept_id}>
-                    {dept.dept_code} - {dept.dept_name} ({dept.total_beds} beds)
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Operational Status Filter */}
-            <div className="flex items-center gap-1.5">
-              <Filter className="h-4 w-4 text-slate-400" />
-              <select
-                value={selectedStatus}
-                onChange={(e) => setSelectedStatus(e.target.value)}
-                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              >
-                <option value="all">All Statuses</option>
-                <option value="Available">Available Only</option>
-                <option value="Occupied">Occupied Only</option>
-                <option value="Sanitizing">Sanitizing Only</option>
-                <option value="Out-Of-Service">Out-Of-Service</option>
-              </select>
-            </div>
-
-            {/* Ward Type Filter */}
+      {/* FILTERS */}
+      <motion.section
+        initial={{ opacity: 0, y: 16 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="glass sticky top-[68px] z-30 mt-10 rounded-2xl p-3"
+      >
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex flex-wrap items-center gap-2">
+            <Segmented id="status" options={statusOptions} value={selectedStatus} onChange={setSelectedStatus} size="sm" />
+            <Segmented id="dept" options={deptOptions} value={selectedDept} onChange={setSelectedDept} size="sm" />
+          </div>
+          <div className="flex items-center gap-2">
             <select
               value={selectedWardType}
               onChange={(e) => setSelectedWardType(e.target.value)}
-              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="field !w-auto !py-2 text-xs"
+              aria-label="Ward type"
             >
-              <option value="all">All Ward Types</option>
-              <option value="ICU">ICU (Intensive Care)</option>
-              <option value="General">General Ward</option>
+              <option value="all">All ward types</option>
+              <option value="ICU">ICU</option>
+              <option value="General">General</option>
               <option value="Pediatric">Pediatric</option>
               <option value="Semi-Private">Semi-Private</option>
             </select>
-          </div>
-
-          {/* Search box */}
-          <div className="relative w-full lg:w-72">
-            <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Search room, bed, or patient..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 bg-white pl-9 pr-3 py-1.5 text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            />
+            <div className="relative w-full xl:w-64">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fg3" />
+              <input
+                type="text"
+                placeholder="Search room, bed, patient…"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="field !py-2 pl-9 text-xs"
+              />
+            </div>
           </div>
         </div>
+      </motion.section>
 
-        {/* Quick status count pills bar */}
-        <div className="mt-3 pt-3 border-t border-slate-100 flex flex-wrap items-center gap-2 text-xs">
-          <span className="text-slate-500 font-medium">Quick Count:</span>
-          <button
-            onClick={() => setSelectedStatus('all')}
-            className={`rounded-full px-2.5 py-0.5 font-bold transition ${
-              selectedStatus === 'all'
-                ? 'bg-slate-900 text-white'
-                : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-            }`}
-          >
-            All ({stats?.totalBeds || beds.length})
-          </button>
-          <button
-            onClick={() => setSelectedStatus('Available')}
-            className={`rounded-full px-2.5 py-0.5 font-bold transition ${
-              selectedStatus === 'Available'
-                ? 'bg-emerald-600 text-white'
-                : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
-            }`}
-          >
-            Available ({stats?.availableBeds || 0})
-          </button>
-          <button
-            onClick={() => setSelectedStatus('Occupied')}
-            className={`rounded-full px-2.5 py-0.5 font-bold transition ${
-              selectedStatus === 'Occupied'
-                ? 'bg-rose-600 text-white'
-                : 'bg-rose-50 text-rose-800 hover:bg-rose-100'
-            }`}
-          >
-            Occupied ({stats?.occupiedBeds || 0})
-          </button>
-          <button
-            onClick={() => setSelectedStatus('Sanitizing')}
-            className={`rounded-full px-2.5 py-0.5 font-bold transition ${
-              selectedStatus === 'Sanitizing'
-                ? 'bg-amber-600 text-white'
-                : 'bg-amber-50 text-amber-800 hover:bg-amber-100'
-            }`}
-          >
-            Sanitizing ({stats?.sanitizingBeds || 0})
-          </button>
-        </div>
-      </div>
-
-      {/* Visual Bed Grid */}
-      <div className="mt-6">
-        {loading ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
-            {[...Array(8)].map((_, i) => (
-              <div
-                key={i}
-                className="h-64 rounded-2xl bg-white p-5 border border-slate-200 animate-pulse"
-              >
-                <div className="h-6 w-24 bg-slate-200 rounded" />
-                <div className="mt-3 h-4 w-36 bg-slate-100 rounded" />
-                <div className="mt-6 h-20 bg-slate-50 rounded" />
+      {/* BED GRID */}
+      <section className="mt-6">
+        {loading && beds.length === 0 ? (
+          <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <div key={i} className="relative h-72 overflow-hidden rounded-2xl border border-tint/[0.11] bg-tint/[0.02]">
+                <motion.div
+                  className="absolute inset-y-0 w-1/2 bg-gradient-to-r from-transparent via-tint/[0.05] to-transparent"
+                  animate={{ x: ['-100%', '250%'] }}
+                  transition={{ duration: 1.4, repeat: Infinity, ease: 'linear', delay: i * 0.08 }}
+                />
               </div>
             ))}
           </div>
         ) : beds.length === 0 ? (
-          <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-white p-12 text-center">
-            <BedDouble className="mx-auto h-12 w-12 text-slate-300" />
-            <h3 className="mt-3 text-base font-bold text-slate-800">No beds matched filters</h3>
-            <p className="mt-1 text-xs text-slate-500">
-              Try adjusting your department, status, or search query filters above.
-            </p>
+          <motion.div
+            initial={{ opacity: 0, scale: 0.97 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="rounded-2xl border border-dashed border-tint/[0.14] bg-tint/[0.02] p-12 text-center"
+          >
+            <BedDouble className="mx-auto h-12 w-12 text-fg3" />
+            <h3 className="mt-3 font-display text-lg font-semibold text-fg">No beds match these filters</h3>
+            <p className="mt-1 text-xs text-fg3">Try a different department, status or search.</p>
             <button
               onClick={() => {
                 setSelectedDept('all');
@@ -339,23 +395,40 @@ export default function DashboardPage() {
                 setSelectedWardType('all');
                 setSearchQuery('');
               }}
-              className="mt-4 rounded-xl bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 transition"
+              className="mt-5 rounded-xl border border-pulse-400/40 bg-pulse-400/10 px-4 py-2 text-xs font-semibold text-pulse-200 transition hover:bg-pulse-400/20"
             >
-              Reset All Filters
+              Reset all filters
             </button>
-          </div>
+          </motion.div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
-            {beds.map((bed) => (
-              <BedCard
-                key={bed.bed_id}
-                bed={bed}
-                onStatusChange={handleBedStatusUpdate}
-              />
-            ))}
-          </div>
+          <motion.div layout className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            <AnimatePresence mode="popLayout">
+              {beds.map((bed, i) => (
+                <motion.div
+                  key={bed.bed_id}
+                  layout
+                  initial={{ opacity: 0, y: 30, scale: 0.92, filter: 'blur(6px)' }}
+                  animate={{ opacity: 1, y: 0, scale: 1, filter: 'blur(0px)' }}
+                  exit={{ opacity: 0, scale: 0.85, filter: 'blur(6px)', transition: { duration: 0.2 } }}
+                  transition={{
+                    type: 'spring',
+                    stiffness: 170,
+                    damping: 20,
+                    delay: Math.min(i, 12) * 0.035,
+                    filter: { duration: 0.4, delay: Math.min(i, 12) * 0.035 },
+                  }}
+                >
+                  <BedCard bed={bed} onStatusChange={handleBedStatusUpdate} highlight={focusBed === bed.bed_id} />
+                </motion.div>
+              ))}
+            </AnimatePresence>
+          </motion.div>
         )}
-      </div>
+      </section>
     </div>
   );
+}
+
+function Count({ n }: { n?: number }) {
+  return <span className="rounded-md bg-tint/10 px-1.5 font-mono text-[10px] tabular-nums">{n ?? 0}</span>;
 }

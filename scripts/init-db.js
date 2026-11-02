@@ -138,6 +138,9 @@ async function initializeDatabase() {
       'medical_equipments',
       'billing',
       'bed_transfer_audit',
+      'staff_accounts',
+      'staff_sessions',
+      'login_audit',
     ];
 
     for (const table of tables) {

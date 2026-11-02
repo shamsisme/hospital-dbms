@@ -1,86 +1,114 @@
+'use client';
+
 import React from 'react';
-import { LucideIcon } from 'lucide-react';
+import { motion } from 'framer-motion';
+import type { LucideIcon } from 'lucide-react';
+import SpotlightCard from './fx/SpotlightCard';
+import CountUp from './fx/CountUp';
+
+type Variant = 'blue' | 'rose' | 'amber' | 'emerald' | 'slate' | 'violet';
+
+const RGB: Record<Variant, string> = {
+  blue: '46,230,245',
+  rose: '251,113,133',
+  amber: '251,191,36',
+  emerald: '52,211,153',
+  slate: '148,163,184',
+  violet: '148,116,255',
+};
 
 interface MetricCardProps {
   title: string;
-  value: string | number;
+  value: number | null | undefined;
+  prefix?: string;
+  suffix?: string;
+  decimals?: number;
   subtitle?: string;
   icon: LucideIcon;
-  variant?: 'blue' | 'rose' | 'amber' | 'emerald' | 'slate';
+  variant?: Variant;
   badge?: string;
+  index?: number;
+  /** 0-100 progress shown as a thin glowing bar */
+  progress?: number;
 }
 
 export default function MetricCard({
   title,
   value,
+  prefix,
+  suffix,
+  decimals = 0,
   subtitle,
   icon: Icon,
   variant = 'blue',
   badge,
+  index = 0,
+  progress,
 }: MetricCardProps) {
-  const variantStyles = {
-    blue: {
-      bg: 'bg-white',
-      border: 'border-blue-200/80 hover:border-blue-300',
-      iconBg: 'bg-blue-50 text-blue-600 ring-1 ring-blue-100',
-      valueColor: 'text-slate-900',
-      badgeColor: 'bg-blue-50 text-blue-700 border-blue-200',
-    },
-    rose: {
-      bg: 'bg-white',
-      border: 'border-rose-200/80 hover:border-rose-300',
-      iconBg: 'bg-rose-50 text-rose-600 ring-1 ring-rose-100',
-      valueColor: 'text-slate-900',
-      badgeColor: 'bg-rose-50 text-rose-700 border-rose-200',
-    },
-    amber: {
-      bg: 'bg-white',
-      border: 'border-amber-200/80 hover:border-amber-300',
-      iconBg: 'bg-amber-50 text-amber-600 ring-1 ring-amber-100',
-      valueColor: 'text-slate-900',
-      badgeColor: 'bg-amber-50 text-amber-700 border-amber-200',
-    },
-    emerald: {
-      bg: 'bg-white',
-      border: 'border-emerald-200/80 hover:border-emerald-300',
-      iconBg: 'bg-emerald-50 text-emerald-600 ring-1 ring-emerald-100',
-      valueColor: 'text-slate-900',
-      badgeColor: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-    },
-    slate: {
-      bg: 'bg-white',
-      border: 'border-slate-200/80 hover:border-slate-300',
-      iconBg: 'bg-slate-100 text-slate-700 ring-1 ring-slate-200',
-      valueColor: 'text-slate-900',
-      badgeColor: 'bg-slate-100 text-slate-700 border-slate-200',
-    },
-  }[variant];
-
+  const rgb = RGB[variant];
   return (
-    <div
-      className={`relative overflow-hidden rounded-xl border p-5 shadow-sm transition-all duration-200 hover:shadow-md ${variantStyles.bg} ${variantStyles.border}`}
+    <motion.div
+      initial={{ opacity: 0, y: 24, scale: 0.96 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ type: 'spring', stiffness: 140, damping: 18, delay: 0.1 + index * 0.08 }}
+      whileHover={{ y: -4 }}
     >
-      <div className="flex items-start justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">{title}</p>
-          <div className="mt-2 flex items-baseline gap-2">
-            <span className={`text-3xl font-extrabold tracking-tight ${variantStyles.valueColor}`}>
-              {value}
-            </span>
-            {badge && (
-              <span
-                className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${variantStyles.badgeColor}`}
-              >
-                {badge}
-              </span>
-            )}
+      <SpotlightCard glow={rgb} innerClassName="p-5">
+        <div
+          aria-hidden
+          className="absolute -right-10 -top-10 h-32 w-32 rounded-full blur-2xl"
+          style={{ background: `rgba(${rgb},0.08)` }}
+        />
+        <div className="relative flex items-start justify-between gap-3">
+          <p className="min-w-0 pt-1 font-mono text-[10.5px] font-semibold uppercase tracking-[0.18em] text-fg2">{title}</p>
+          <div
+            className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl border"
+            style={{
+              color: `rgb(${rgb})`,
+              borderColor: `rgba(${rgb},0.3)`,
+              background: `rgba(${rgb},0.09)`,
+              
+            }}
+          >
+            <Icon className="h-5 w-5" strokeWidth={1.8} />
           </div>
-          {subtitle && <p className="mt-1 text-xs text-slate-500">{subtitle}</p>}
         </div>
-        <div className={`rounded-xl p-3 shadow-inner ${variantStyles.iconBg}`}>
-          <Icon className="h-6 w-6" />
+        <div className="relative mt-2">
+          {value === null || value === undefined ? (
+            <span className="block h-9 w-16 animate-pulse rounded-lg bg-tint/5" />
+          ) : (
+            <CountUp
+              value={value}
+              decimals={decimals}
+              prefix={prefix}
+              suffix={suffix}
+              className="block font-display text-[32px] font-bold leading-none tracking-tight text-fg"
+            />
+          )}
         </div>
-      </div>
-    </div>
+        <div className="relative mt-2.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+          {subtitle && <p className="min-w-0 text-xs text-fg2">{subtitle}</p>}
+          {badge && (
+            <span
+              className="whitespace-nowrap rounded-full border px-2 py-0.5 font-mono text-[9.5px] uppercase tracking-wider"
+              style={{ color: `rgb(${rgb})`, borderColor: `rgba(${rgb},0.3)`, background: `rgba(${rgb},0.08)` }}
+            >
+              {badge}
+            </span>
+          )}
+        </div>
+        {progress !== undefined && (
+          <div className="relative mt-4 h-1 overflow-hidden rounded-full bg-tint/[0.06]">
+            <motion.div
+              className="absolute inset-y-0 left-0 rounded-full"
+              style={{ background: `rgb(${rgb})`, }}
+              initial={{ width: 0 }}
+              animate={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
+              transition={{ duration: 1.4, ease: [0.22, 1, 0.36, 1], delay: 0.3 + index * 0.08 }}
+            />
+          </div>
+        )}
+      </SpotlightCard>
+    </motion.div>
   );
 }

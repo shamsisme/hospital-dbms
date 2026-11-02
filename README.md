@@ -7,6 +7,7 @@ A full-stack, enterprise-grade clinical management dashboard built with **Next.j
 ## 🏥 Architecture & Tech Stack
 
 - **Frontend & App Framework**: Next.js 14 (App Router) + React 18 + TypeScript
+- **Motion & 3D**: Framer Motion, three.js via React Three Fiber + drei + postprocessing (3D hospital digital twin and occupancy vials)
 - **Styling**: Tailwind CSS + Custom Healthcare Tokens + Lucide React Icons
 - **Database Driver**: Native `pg` (node-postgres) Connection Pool with parameterized queries (`$1, $2, ...`)
 - **Database Engine**: PostgreSQL 18 on `localhost:5432` (`hospital_db`)
@@ -34,7 +35,7 @@ DATABASE_URL=postgresql://postgres:YOUR_LOCAL_PASSWORD@localhost:5432/hospital_d
 
 ### 2. Install Dependencies & Initialize Database
 
-Run the automated database setup script to create `hospital_db`, load the complete normalized schema (8 tables, GiST temporal exclusion constraints, views, triggers, stored procedures), and seed realistic clinical data:
+Run the automated database setup script to create `hospital_db`, load the complete normalized schema (11 tables, GiST temporal exclusion constraints, views, triggers, stored procedures), and seed realistic clinical data:
 
 ```bash
 # Install dependencies
@@ -49,6 +50,10 @@ npm run dev
 
 Visit the dashboard in your browser:
 **`http://localhost:3000`**
+
+You land on the staff sign-in page. Pick a badge from the badge rack (or type a badge ID such as `DOC-1002-TN`), tap it on the reader, then enter the demo PIN **`246810`**.
+
+> `npm run db:setup` drops and recreates the `public` schema, so it resets all data, including staff sessions and the login audit log.
 
 ---
 
@@ -122,9 +127,29 @@ Visit the dashboard in your browser:
 
 ---
 
+## 🪪 Staff Sign-In (Badge + Pulse-PIN)
+
+Every page and API route requires a staff session.
+
+- **Lanyard badge**: a draggable ID badge that swings on a spring. Drag it onto the NFC reader (or press Continue) to tap in. The badge colour follows the role encoded in the badge ID (`DOC` doctor, `NUR` nurse, `BIL` billing, `ADM` admin).
+- **Pulse-PIN**: a 6-digit PIN keyed on a live ECG monitor. Each digit is a heartbeat; a correct PIN settles into sinus rhythm, a wrong one shows fibrillation, and a locked badge flatlines.
+- **Verified inside PostgreSQL**: `fn_authenticate_staff()` checks the bcrypt hash with `pgcrypto` (`crypt()` / `gen_salt('bf')`), locks a badge for 15 minutes after 5 wrong PINs, and writes every attempt to `login_audit`. Unknown badges and wrong PINs return the same answer, so badge IDs cannot be probed.
+- **Sessions**: a random token goes into an `httpOnly` cookie; only its SHA-256 hash is stored in `staff_sessions`. Standard sessions last one 8-hour shift. Signing out revokes the session row.
+- **Break-glass emergency access**: in an emergency a valid badge can skip the PIN by recording a reason (10+ characters). Access lasts 15 minutes, shows a red countdown banner on every page, is enforced by `chk_break_glass_window`, and is limited to 2 uses per badge per day.
+
+| Table | Purpose |
+|---|---|
+| `staff_accounts` | Badge ID, name, role, optional link to `doctors`, bcrypt PIN hash (`chk_pin_is_bcrypt`) |
+| `staff_sessions` | Hashed session tokens, access mode (`standard` / `break_glass`), expiry, revocation |
+| `login_audit` | Every sign-in, failure, lock-out, break-glass grant and sign-out with IP and user agent |
+
+Seeded badges (PIN `246810`): `DOC-1001-TN`, `DOC-1002-TN`, `NUR-2001`, `BIL-3001`, `ADM-0001`.
+
+---
+
 ## 🔌 REST API Endpoints
 
-All endpoints use parameterized queries (`$1, $2`) via `lib/db.ts`:
+All endpoints use parameterized queries (`$1, $2`) via `lib/db.ts`. Data endpoints return `401` without a valid staff session.
 
 | Method | Endpoint | Description |
 |---|---|---|
@@ -141,6 +166,10 @@ All endpoints use parameterized queries (`$1, $2`) via `lib/db.ts`:
 | `POST` | `/api/billing/discharge` | Atomic discharge, bed release, and billing invoice generation |
 | `GET` | `/api/billing/invoices` | Past and settled billing invoices |
 | `GET` | `/api/analytics` | Departmental capacity, occupancy %, and revenue SQL aggregates |
+| `POST` | `/api/auth/login` | Badge + PIN sign-in via `fn_authenticate_staff()` (lock-out, audit) |
+| `POST` | `/api/auth/break-glass` | 15-minute emergency session with a recorded reason |
+| `GET` | `/api/auth/me` | Current staff session |
+| `POST` | `/api/auth/logout` | Revoke the session and clear the cookie |
 
 ---
 
@@ -151,3 +180,4 @@ All endpoints use parameterized queries (`$1, $2`) via `lib/db.ts`:
 3. **Billing Stored Generated Columns**: `gross_amount` and `net_patient_payable` are computed automatically by PostgreSQL.
 4. **Settled Timestamp Consistency**: `chk_settled_time` requires non-null `settled_at` only when `payment_status = 'Settled'`.
 5. **SQL Injection Prevention**: 100% of queries use `$1, $2, ...` prepared statements.
+6. **Credential Safety**: PINs exist only as bcrypt hashes (`pgcrypto`); session tokens exist only as SHA-256 hashes; break-glass sessions cannot exceed 15 minutes (`chk_break_glass_window`).

@@ -1,28 +1,21 @@
 'use client';
 
-import React, { useState, useEffect, Suspense } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import {
-  Receipt,
-  Users,
-  CheckCircle2,
-  Clock,
-  Calendar,
-  BedDouble,
-  DollarSign,
-  Printer,
-  Search,
-  RefreshCw,
-  ArrowRight,
-  ShieldAlert,
-} from 'lucide-react';
+import { AnimatePresence, motion } from 'framer-motion';
+import { BedDouble, Clock, IndianRupee, Receipt, RefreshCw, Search, Stethoscope, Users, Wallet } from 'lucide-react';
 import DischargeModal, { InpatientBillingItem } from '@/components/DischargeModal';
 import { useToast } from '@/components/ToastContext';
+import PageHeader, { GhostButton } from '@/components/PageHeader';
+import MetricCard from '@/components/MetricCard';
+import Segmented from '@/components/fx/Segmented';
+import TriageBadge from '@/components/TriageBadge';
+
+const inr = (n: any) => `₹${Number(n || 0).toLocaleString('en-IN')}`;
 
 function BillingTerminalContent() {
   const searchParams = useSearchParams();
   const preselectedAdmissionId = searchParams.get('admission_id');
-
   const { toast } = useToast();
 
   const [loading, setLoading] = useState(true);
@@ -30,25 +23,16 @@ function BillingTerminalContent() {
   const [pastInvoices, setPastInvoices] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'active' | 'invoices'>('active');
-
-  // Modal State
   const [selectedInpatient, setSelectedInpatient] = useState<InpatientBillingItem | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
   const loadBillingData = async () => {
     setLoading(true);
     try {
-      const [actRes, invRes] = await Promise.all([
-        fetch('/api/billing/active'),
-        fetch('/api/billing/invoices'),
-      ]);
-
+      const [actRes, invRes] = await Promise.all([fetch('/api/billing/active'), fetch('/api/billing/invoices')]);
       const [actData, invData] = await Promise.all([actRes.json(), invRes.json()]);
-
       if (actData.success) {
         setActiveInpatients(actData.activeInpatients);
-
-        // Preselect if requested via query param
         if (preselectedAdmissionId) {
           const match = actData.activeInpatients.find(
             (item: InpatientBillingItem) => String(item.admission_id) === String(preselectedAdmissionId)
@@ -59,16 +43,9 @@ function BillingTerminalContent() {
           }
         }
       }
-
-      if (invData.success) {
-        setPastInvoices(invData.invoices);
-      }
+      if (invData.success) setPastInvoices(invData.invoices);
     } catch (err: any) {
-      toast({
-        type: 'error',
-        title: 'Billing Load Error',
-        message: err.message || 'Failed to fetch billing records.',
-      });
+      toast({ type: 'error', title: 'Billing Load Error', message: err.message || 'Failed to fetch billing records.' });
     } finally {
       setLoading(false);
     }
@@ -76,322 +53,268 @@ function BillingTerminalContent() {
 
   useEffect(() => {
     loadBillingData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preselectedAdmissionId]);
 
-  const handleOpenDischarge = (inpatient: InpatientBillingItem) => {
-    setSelectedInpatient(inpatient);
-    setIsModalOpen(true);
-  };
-
-  const handleDischargeSuccess = (invoice: any) => {
-    // Reload data to reflect discharged patient and newly created invoice
-    loadBillingData();
-  };
-
-  const filteredInpatients = activeInpatients.filter((item) => {
-    if (!searchQuery.trim()) return true;
-    const q = searchQuery.toLowerCase();
-    return (
-      item.patient_name.toLowerCase().includes(q) ||
-      item.national_health_id.toLowerCase().includes(q) ||
-      item.room_number.toLowerCase().includes(q) ||
-      item.doctor_name.toLowerCase().includes(q)
-    );
-  });
-
-  const filteredInvoices = pastInvoices.filter((inv) => {
-    if (!searchQuery.trim()) return true;
-    const q = searchQuery.toLowerCase();
-    return (
+  const q = searchQuery.trim().toLowerCase();
+  const filteredInpatients = activeInpatients.filter(
+    (i) =>
+      !q ||
+      i.patient_name.toLowerCase().includes(q) ||
+      i.national_health_id.toLowerCase().includes(q) ||
+      i.room_number.toLowerCase().includes(q) ||
+      i.doctor_name.toLowerCase().includes(q)
+  );
+  const filteredInvoices = pastInvoices.filter(
+    (inv) =>
+      !q ||
       inv.patient_name.toLowerCase().includes(q) ||
       inv.national_health_id.toLowerCase().includes(q) ||
       String(inv.bill_id).includes(q)
-    );
-  });
+  );
+
+  const estTotal = activeInpatients.reduce((s, i) => s + Number(i.estimated_bed_charges || 0), 0);
+  const netCollected = pastInvoices.reduce((s, i) => s + Number(i.net_patient_payable || 0), 0);
+  const grossBilled = pastInvoices.reduce((s, i) => s + Number(i.gross_amount || 0), 0);
+  const maxDays = Math.max(1, ...activeInpatients.map((i) => Number(i.billable_days) || 1));
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
-      {/* Discharge & Billing Modal */}
+    <div className="mx-auto max-w-7xl px-4 pt-8 sm:px-6">
       <DischargeModal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         inpatient={selectedInpatient}
-        onDischargeSuccess={handleDischargeSuccess}
+        onDischargeSuccess={() => loadBillingData()}
       />
 
-      {/* Header */}
-      <div className="pb-6 border-b border-slate-200">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <div>
-            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900">
-              Patient Discharge & Billing Terminal
-            </h1>
-            <p className="mt-1 text-sm text-slate-500">
-              Real-time length-of-stay tracking, automated bed tariff calculation, insurance deductions, and clinical clearance.
-            </p>
-          </div>
+      <PageHeader
+        eyebrow="Clearance terminal"
+        title="Discharge & Billing"
+        accent={['Billing']}
+        subtitle="Length-of-stay tracking, automatic tariff calculation, insurance deductions and an atomic discharge that releases the bed and writes the invoice in one commit."
+        actions={
+          <GhostButton onClick={loadBillingData} disabled={loading}>
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Sync census
+          </GhostButton>
+        }
+      />
 
-          <button
-            onClick={loadBillingData}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 transition"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-            <span>Sync Inpatient Census</span>
-          </button>
-        </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <MetricCard index={0} title="Active inpatients" value={loading ? null : activeInpatients.length} icon={Users} variant="rose" badge="In beds" />
+        <MetricCard index={1} title="Accruing bed charges" value={loading ? null : estTotal} prefix="₹" icon={BedDouble} variant="amber" badge="Estimated" />
+        <MetricCard index={2} title="Gross billed" value={loading ? null : grossBilled} prefix="₹" icon={IndianRupee} variant="violet" badge={`${pastInvoices.length} invoices`} />
+        <MetricCard index={3} title="Net patient payable" value={loading ? null : netCollected} prefix="₹" icon={Wallet} variant="emerald" badge="After ins./disc." />
       </div>
 
-      {/* Navigation Tabs & Search */}
-      <div className="mt-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-2 border-b border-slate-200 pb-2 sm:border-0 sm:pb-0">
-          <button
-            onClick={() => setActiveTab('active')}
-            className={`flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-bold transition ${
-              activeTab === 'active'
-                ? 'bg-slate-900 text-white shadow-sm'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-            }`}
-          >
-            <Users className="h-4 w-4" />
-            <span>Active Inpatients ({activeInpatients.length})</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('invoices')}
-            className={`flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-bold transition ${
-              activeTab === 'invoices'
-                ? 'bg-slate-900 text-white shadow-sm'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-            }`}
-          >
-            <Receipt className="h-4 w-4" />
-            <span>Settled & Historical Invoices ({pastInvoices.length})</span>
-          </button>
-        </div>
-
+      <div className="mt-10 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <Segmented
+          id="billing-tab"
+          value={activeTab}
+          onChange={setActiveTab}
+          options={[
+            { value: 'active', label: <><Users className="h-3.5 w-3.5" /> Active inpatients ({activeInpatients.length})</>, glow: '251,113,133' },
+            { value: 'invoices', label: <><Receipt className="h-3.5 w-3.5" /> Invoices ({pastInvoices.length})</>, glow: '148,116,255' },
+          ]}
+        />
         <div className="relative w-full sm:w-72">
-          <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fg3" />
           <input
-            type="text"
-            placeholder="Search patient, NHID, or room..."
+            placeholder="Search patient, NHID, room…"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full rounded-xl border border-slate-300 bg-white pl-9 pr-3 py-2 text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            className="field !py-2 pl-9 text-xs"
           />
         </div>
       </div>
 
-      {/* Main Content Table Area */}
-      <div className="mt-6">
-        {activeTab === 'active' ? (
-          /* Active Inpatients Table */
-          <div className="overflow-hidden rounded-2xl bg-white shadow-sm border border-slate-200">
-            <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
-              <div>
-                <h3 className="text-sm font-extrabold text-slate-900">
-                  Active Hospital Census ({filteredInpatients.length} Inpatients)
-                </h3>
-                <p className="text-xs text-slate-500">
-                  Click &ldquo;Discharge & Generate Bill&rdquo; to calculate bed charges and release bed in an atomic transaction.
-                </p>
-              </div>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-100/70 text-slate-700 font-bold uppercase tracking-wider text-[11px] border-b border-slate-200">
-                  <tr>
-                    <th className="px-5 py-3.5">Patient / NHID</th>
-                    <th className="px-5 py-3.5">Assigned Bed & Ward</th>
-                    <th className="px-5 py-3.5">Admitting Physician</th>
-                    <th className="px-5 py-3.5">Admission Date</th>
-                    <th className="px-5 py-3.5">Length of Stay</th>
-                    <th className="px-5 py-3.5">Daily Tariff</th>
-                    <th className="px-5 py-3.5">Est. Bed Charges</th>
-                    <th className="px-5 py-3.5 text-right">Clearance Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {filteredInpatients.length === 0 ? (
-                    <tr>
-                      <td colSpan={8} className="px-5 py-12 text-center text-slate-400">
-                        {loading ? 'Loading active census...' : 'No active inpatients found.'}
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredInpatients.map((item) => (
-                      <tr key={item.admission_id} className="hover:bg-slate-50/80 transition">
-                        <td className="px-5 py-4">
-                          <div className="font-bold text-slate-900 text-sm">{item.patient_name}</div>
-                          <div className="font-mono text-[11px] text-slate-500">{item.national_health_id}</div>
-                        </td>
-
-                        <td className="px-5 py-4">
-                          <div className="font-bold text-slate-900">
-                            {item.room_number} <span className="font-mono text-xs">({item.bed_label})</span>
-                          </div>
-                          <div className="text-[11px] text-slate-500">{item.ward_type} • {item.dept_name}</div>
-                        </td>
-
-                        <td className="px-5 py-4">
-                          <div className="font-semibold text-slate-800">{item.doctor_name}</div>
-                          <div className="text-[11px] text-slate-500 italic max-w-xs truncate">
-                            {item.admission_diagnosis}
-                          </div>
-                        </td>
-
-                        <td className="px-5 py-4">
-                          <div className="font-medium text-slate-700">
-                            {new Date(item.admission_time).toLocaleDateString('en-IN', {
-                              month: 'short',
-                              day: 'numeric',
-                              year: 'numeric',
-                            })}
-                          </div>
-                          <div className="text-[11px] text-slate-400">
-                            {new Date(item.admission_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                          </div>
-                        </td>
-
-                        <td className="px-5 py-4">
-                          <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-1 text-xs font-bold text-blue-700 border border-blue-200">
-                            <Clock className="h-3 w-3" />
+      <div className="mt-5">
+        <AnimatePresence mode="wait">
+          {activeTab === 'active' ? (
+            <motion.div
+              key="active"
+              initial={{ opacity: 0, x: -30 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 30 }}
+              transition={{ type: 'spring', stiffness: 200, damping: 26 }}
+              className="space-y-3"
+            >
+              {filteredInpatients.length === 0 ? (
+                <Empty text={loading ? 'Loading active census…' : 'No active inpatients found.'} />
+              ) : (
+                filteredInpatients.map((item, i) => (
+                  <motion.div
+                    key={item.admission_id}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: i * 0.06, type: 'spring', stiffness: 160, damping: 20 }}
+                    whileHover={{ scale: 1.005 }}
+                    className="group relative overflow-hidden rounded-2xl border border-tint/[0.12] bg-ink-900/70 p-4 backdrop-blur-xl transition hover:border-rose-400/30 sm:p-5"
+                  >
+                    <div className="absolute inset-y-0 left-0 w-0.5 bg-gradient-to-b from-rose-400 via-pink-500 to-plasma-500" />
+                    <div className="grid grid-cols-2 items-center gap-4 lg:grid-cols-12">
+                      <div className="col-span-2 lg:col-span-3">
+                        <div className="flex items-center gap-2">
+                          <span className="font-display text-base font-bold text-fg">{item.patient_name}</span>
+                        </div>
+                        <div className="font-mono text-[10.5px] text-fg3">{item.national_health_id}</div>
+                        {item.triage_priority ? <div className="mt-1.5"><TriageBadge priority={item.triage_priority} size="sm" /></div> : null}
+                      </div>
+                      <div className="lg:col-span-2">
+                        <Lbl>Bed</Lbl>
+                        <div className="font-mono text-sm font-semibold text-fg">
+                          {item.room_number} · {item.bed_label}
+                        </div>
+                        <div className="truncate text-[11px] text-fg3">
+                          {item.ward_type} · {item.dept_name}
+                        </div>
+                      </div>
+                      <div className="lg:col-span-3">
+                        <Lbl>Physician</Lbl>
+                        <div className="flex items-center gap-1.5 text-sm text-fg">
+                          <Stethoscope className="h-3.5 w-3.5 text-fg3" />
+                          <span className="truncate">{item.doctor_name}</span>
+                        </div>
+                        <div className="truncate text-[11px] italic text-fg3">{item.admission_diagnosis}</div>
+                      </div>
+                      <div className="lg:col-span-2">
+                        <Lbl>Length of stay</Lbl>
+                        <div className="flex items-center gap-2">
+                          <Clock className="h-3.5 w-3.5 text-pulse-300" />
+                          <span className="font-display text-sm font-bold text-fg">
                             {item.billable_days} {item.billable_days === 1 ? 'day' : 'days'}
                           </span>
-                          <span className="block text-[10px] text-slate-400 mt-0.5">
-                            ({item.actual_days_elapsed}d actual)
-                          </span>
-                        </td>
-
-                        <td className="px-5 py-4 font-mono font-semibold text-slate-700">
-                          ₹{Number(item.daily_tariff).toLocaleString('en-IN')}/day
-                        </td>
-
-                        <td className="px-5 py-4 font-mono font-bold text-slate-900">
-                          ₹{Number(item.estimated_bed_charges).toLocaleString('en-IN')}
-                        </td>
-
-                        <td className="px-5 py-4 text-right">
-                          <button
-                            onClick={() => handleOpenDischarge(item)}
-                            className="inline-flex items-center gap-1.5 rounded-xl bg-slate-900 px-3.5 py-2 text-xs font-bold text-white shadow-sm hover:bg-slate-800 transition"
-                          >
-                            <Receipt className="h-3.5 w-3.5" />
-                            <span>Discharge & Bill</span>
-                          </button>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        ) : (
-          /* Settled Invoices Table */
-          <div className="overflow-hidden rounded-2xl bg-white shadow-sm border border-slate-200">
-            <div className="p-4 border-b border-slate-100 bg-slate-50/50">
-              <h3 className="text-sm font-extrabold text-slate-900">Historical Hospital Invoices</h3>
-              <p className="text-xs text-slate-500">Audit trail of discharged admissions and generated bills.</p>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-100/70 text-slate-700 font-bold uppercase tracking-wider text-[11px] border-b border-slate-200">
-                  <tr>
-                    <th className="px-5 py-3.5">Bill ID</th>
-                    <th className="px-5 py-3.5">Patient Details</th>
-                    <th className="px-5 py-3.5">Discharge Bed</th>
-                    <th className="px-5 py-3.5">Bed Charges</th>
-                    <th className="px-5 py-3.5">Gross Bill</th>
-                    <th className="px-5 py-3.5">Insurance / Discount</th>
-                    <th className="px-5 py-3.5">Net Payable</th>
-                    <th className="px-5 py-3.5">Payment Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {filteredInvoices.length === 0 ? (
-                    <tr>
-                      <td colSpan={8} className="px-5 py-12 text-center text-slate-400">
-                        No billing invoices recorded yet.
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredInvoices.map((inv) => (
-                      <tr key={inv.bill_id} className="hover:bg-slate-50/80 transition">
-                        <td className="px-5 py-4 font-mono font-bold text-blue-600">
-                          #{inv.bill_id}
-                        </td>
-
-                        <td className="px-5 py-4">
-                          <div className="font-bold text-slate-900">{inv.patient_name}</div>
-                          <div className="font-mono text-[11px] text-slate-500">{inv.national_health_id}</div>
-                        </td>
-
-                        <td className="px-5 py-4">
-                          <div className="font-semibold text-slate-800">
-                            {inv.room_number} ({inv.bed_label})
+                        </div>
+                        <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-tint/[0.06]">
+                          <motion.div
+                            className="h-full rounded-full bg-gradient-to-r from-pulse-400 to-plasma-500"
+                            initial={{ width: 0 }}
+                            animate={{ width: `${(Number(item.billable_days) / maxDays) * 100}%` }}
+                            transition={{ duration: 1.1, delay: 0.2 + i * 0.06, ease: [0.22, 1, 0.36, 1] }}
+                          />
+                        </div>
+                        <div className="mt-1 font-mono text-[10px] text-fg3">
+                          {item.actual_days_elapsed}d actual · {inr(item.daily_tariff)}/d
+                        </div>
+                      </div>
+                      <div className="col-span-2 flex items-center justify-between gap-3 lg:col-span-2 lg:flex-col lg:items-end">
+                        <div className="lg:text-right">
+                          <Lbl>Est. bed charges</Lbl>
+                          <div className="font-mono text-base font-bold text-amber-200">{inr(item.estimated_bed_charges)}</div>
+                        </div>
+                        <button
+                          onClick={() => {
+                            setSelectedInpatient(item);
+                            setIsModalOpen(true);
+                          }}
+                          className="inline-flex items-center gap-1.5 rounded-xl border border-rose-400/35 bg-rose-500/15 px-3.5 py-2 text-xs font-semibold text-rose-100 transition hover:bg-rose-500/25"
+                        >
+                          <Receipt className="h-3.5 w-3.5" /> Discharge & bill
+                        </button>
+                      </div>
+                    </div>
+                  </motion.div>
+                ))
+              )}
+            </motion.div>
+          ) : (
+            <motion.div
+              key="invoices"
+              initial={{ opacity: 0, x: 30 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -30 }}
+              transition={{ type: 'spring', stiffness: 200, damping: 26 }}
+              className="grid grid-cols-1 gap-4 md:grid-cols-2"
+            >
+              {filteredInvoices.length === 0 ? (
+                <div className="md:col-span-2">
+                  <Empty text="No billing invoices recorded yet." />
+                </div>
+              ) : (
+                filteredInvoices.map((inv, i) => {
+                  const settled = inv.payment_status === 'Settled';
+                  const unpaid = inv.payment_status === 'Unpaid';
+                  const rgb = settled ? '52,211,153' : unpaid ? '251,113,133' : '251,191,36';
+                  return (
+                    <motion.div
+                      key={inv.bill_id}
+                      initial={{ opacity: 0, y: 20, rotateX: 18 }}
+                      animate={{ opacity: 1, y: 0, rotateX: 0 }}
+                      transition={{ delay: i * 0.07, type: 'spring', stiffness: 140, damping: 18 }}
+                      style={{ transformPerspective: 1000 }}
+                      whileHover={{ y: -4 }}
+                      className="relative overflow-hidden rounded-2xl border border-tint/[0.13] bg-ink-900/70 backdrop-blur-xl"
+                    >
+                      <div className="h-1 bg-gradient-to-r from-pulse-400 via-plasma-500 to-pink-500" />
+                      <div className="p-5">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="font-mono text-xs font-bold text-pulse-300">INVOICE #{inv.bill_id}</div>
+                            <div className="mt-1 font-display text-base font-bold text-fg">{inv.patient_name}</div>
+                            <div className="font-mono text-[10.5px] text-fg3">{inv.national_health_id}</div>
                           </div>
-                          <div className="text-[11px] text-slate-500">{inv.ward_type} • {inv.dept_name}</div>
-                        </td>
-
-                        <td className="px-5 py-4 font-mono text-slate-700">
-                          ₹{Number(inv.bed_charges).toLocaleString('en-IN')}
-                        </td>
-
-                        <td className="px-5 py-4 font-mono font-semibold text-slate-900">
-                          ₹{Number(inv.gross_amount).toLocaleString('en-IN')}
-                        </td>
-
-                        <td className="px-5 py-4 text-[11px]">
-                          {Number(inv.insurance_claim_approved) > 0 && (
-                            <span className="block text-emerald-700 font-mono">
-                              Ins: ₹{Number(inv.insurance_claim_approved).toLocaleString('en-IN')}
-                            </span>
-                          )}
-                          {Number(inv.discount_percentage) > 0 && (
-                            <span className="block text-amber-700 font-mono">
-                              Disc: {inv.discount_percentage}%
-                            </span>
-                          )}
-                          {Number(inv.insurance_claim_approved) === 0 && Number(inv.discount_percentage) === 0 && (
-                            <span className="text-slate-400">None</span>
-                          )}
-                        </td>
-
-                        <td className="px-5 py-4 font-mono font-black text-slate-900 text-sm">
-                          ₹{Number(inv.net_patient_payable).toLocaleString('en-IN')}
-                        </td>
-
-                        <td className="px-5 py-4">
                           <span
-                            className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-bold ${
-                              inv.payment_status === 'Settled'
-                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                                : inv.payment_status === 'Unpaid'
-                                ? 'bg-rose-100 text-rose-800 border border-rose-300'
-                                : 'bg-amber-100 text-amber-800 border border-amber-300'
-                            }`}
+                            className="rounded-full border px-2.5 py-1 text-[11px] font-semibold"
+                            style={{ color: `rgb(${rgb})`, borderColor: `rgba(${rgb},0.35)`, background: `rgba(${rgb},0.1)` }}
                           >
                             {inv.payment_status}
                           </span>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
+                        </div>
+                        <div className="mt-3 text-[11.5px] text-fg2">
+                          {inv.room_number} ({inv.bed_label}) · {inv.ward_type} · {inv.dept_name}
+                        </div>
+                        <div className="mt-4 grid grid-cols-3 gap-2 font-mono text-[11px]">
+                          <Cell k="Bed" v={inr(inv.bed_charges)} />
+                          <Cell k="Gross" v={inr(inv.gross_amount)} />
+                          <Cell
+                            k="Ins / Disc"
+                            v={
+                              Number(inv.insurance_claim_approved) === 0 && Number(inv.discount_percentage) === 0
+                                ? 'None'
+                                : `${inr(inv.insurance_claim_approved)} · ${Number(inv.discount_percentage)}%`
+                            }
+                          />
+                        </div>
+                        <div className="mt-4 flex items-end justify-between border-t border-dashed border-tint/[0.14] pt-3">
+                          <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-fg3">Net payable</span>
+                          <span className="font-display text-2xl font-bold text-emerald-300">
+                            {inr(inv.net_patient_payable)}
+                          </span>
+                        </div>
+                      </div>
+                    </motion.div>
+                  );
+                })
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   );
 }
 
+function Lbl({ children }: { children: React.ReactNode }) {
+  return <div className="mb-0.5 font-mono text-[9.5px] uppercase tracking-[0.18em] text-fg3">{children}</div>;
+}
+
+function Cell({ k, v }: { k: string; v: string }) {
+  return (
+    <div className="rounded-lg border border-tint/[0.11] bg-tint/[0.02] p-2">
+      <div className="text-[9.5px] uppercase tracking-wider text-fg3">{k}</div>
+      <div className="mt-0.5 truncate text-fg">{v}</div>
+    </div>
+  );
+}
+
+function Empty({ text }: { text: string }) {
+  return (
+    <div className="rounded-2xl border border-dashed border-tint/[0.14] bg-tint/[0.02] p-12 text-center text-sm text-fg3">{text}</div>
+  );
+}
+
 export default function BillingPage() {
   return (
-    <Suspense fallback={<div className="p-8 text-center text-xs text-slate-500">Loading Billing Terminal...</div>}>
+    <Suspense fallback={<div className="p-8 text-center text-xs text-fg3">Loading billing terminal…</div>}>
       <BillingTerminalContent />
     </Suspense>
   );
